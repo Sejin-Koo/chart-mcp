@@ -85,13 +85,26 @@ def _gantt(args, o):
                 ax.barh(i, w, left=x0, height=0.56, color=c, alpha=0.35 if r["p"] is not None else 1, zorder=2)
                 if r["p"] is not None:
                     ax.barh(i, w * max(0, min(1, r["p"])), left=x0, height=0.56, color=c, zorder=3)
+        # 막대 오른쪽에 기간 글(2026-11-24 — 날짜가 없어 일정이 읽히지 않는다는 지적). 끄기 options.dates=false
+        show_dates = str(o.get("dates", True)).lower() not in ("false", "0", "no")
+        one_year = d0.year == d1.year
+        dfmt = (lambda d: f"{d.month}/{d.day}") if one_year else (lambda d: d.strftime("%y.%m.%d").replace(".0", "."))
+        if show_dates:
+            for i, r in enumerate(rows):
+                if r["s"] == r["e"]:
+                    continue
+                ax.text(mdates.date2num(r["e"]) + max(2, (d1 - d0).days * 0.008), i, f"{dfmt(r['s'])}~{dfmt(r['e'])}",
+                        va="center", ha="left", fontsize=st.LABEL_SIZE, color="#404040", zorder=5)
+            if one_year:
+                ax.text(1.0, -0.13, f"{d0.year}년", transform=ax.transAxes, ha="right", va="top", fontsize=st.LABEL_SIZE, color="#7F7F7F")
         if today:
             ax.axvline(mdates.date2num(today), color=st.BAD, lw=1.2, ls="--", zorder=4)
             ax.text(mdates.date2num(today), 0.0, " 오늘", transform=ax.get_xaxis_transform(), color=st.BAD, fontsize=7.6, va="bottom", ha="left")
         ax.set_yticks(range(n), [r["name"] for r in rows])
         ax.invert_yaxis()
         pad = max(7, (d1 - d0).days * 0.03)
-        ax.set_xlim(mdates.date2num(d0) - pad, mdates.date2num(d1) + pad * 2)
+        right = pad * 2 + ((d1 - d0).days * (0.17 if one_year else 0.24) if show_dates else 0)
+        ax.set_xlim(mdates.date2num(d0) - pad, mdates.date2num(d1) + right)
         _date_axis(ax, d0, d1)
         if len(groups) > 1 and any(groups):
             legend_top(fig, [(g, gc[g], "patch") for g in groups if g], title, sub, o)

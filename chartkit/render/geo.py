@@ -91,12 +91,16 @@ def _polys(geom):
     return [p[0] for p in geom["coordinates"]]
 
 
-def _base_map(ax, fill=None, edge="white"):
+def _base_map(ax, fill=None, edge="white", edges=None, xlim=(124.5, 131.0)):
     geo = _geo()
-    for name, g in geo.items():
+    # 큰 시·도부터 칠한다 — 바깥 경계만 칠하므로 경기가 서울을, 전남이 광주를 덮지 않게(작은 시·도를 나중에)
+    def area(g):
+        a = np.array(max(_polys(g), key=len))
+        return float((a[:, 0].max() - a[:, 0].min()) * (a[:, 1].max() - a[:, 1].min()))
+    for name, g in sorted(geo.items(), key=lambda kv: -area(kv[1])):
         for ring in _polys(g):
-            ax.add_patch(Polygon(np.array(ring), closed=True, facecolor=(fill or {}).get(name, "#E7EAF0"), edgecolor=edge, lw=0.6))
-    ax.set_xlim(124.5, 131.0)
+            ax.add_patch(Polygon(np.array(ring), closed=True, facecolor=(fill or {}).get(name, "#E7EAF0"), edgecolor=(edges or {}).get(name, edge), lw=0.6))
+    ax.set_xlim(*xlim)
     ax.set_ylim(33.0, 38.7)
     ax.set_aspect(1.22)
     ax.axis("off")
@@ -115,59 +119,88 @@ def draw(ct: str, args: dict, o: dict) -> Result:
     need(regs, "regions=[{name, value}]가 필요합니다", example=[{"name": "서울", "value": 1520}])
     notes = []
     if ct == "choropleth":
-        vals, unknown, rows = {}, [], []
+        # 표시 단위(group): 통합 지역(전남광주 등)은 두 경계를 같은 색으로 칠하되 이름·순위·값은 한 번만 쓴다(2026-11-24 — 순위표에 광주·전남이 같은 값으로 두 줄 나오던 결함)
+        vals, unknown, rows, groups = {}, [], [], []
         for i, r in enumerate(regs):
             r = as_dict(r, f"regions[{i}]")
             v = as_number(r.get("value"), f"regions[{i}].value")
-            names = norm_region(r.get("name"))
+            raw = str(r.get("name")).strip()
+            names = norm_region(raw)
             if not all(n in SIDO for n in names):
-                unknown.append(str(r.get("name")))
+                unknown.append(raw)
                 continue
             for n in names:
                 vals[n] = v
-            rows.append([str(r.get("name")), v])
+            label = ("전남광주" if set(names) == {"광주", "전남"} else raw.replace(" ", "")) if len(names) > 1 else names[0]
+            groups.append({"label": label, "members": names, "v": v})
+            rows.append([raw, v])
         if unknown:
             raise ChartInputError(f"시·도 이름을 알 수 없습니다: {', '.join(unknown)}", hint=f"다음 중 하나로 넣으세요: {', '.join(SIDO)}")
         vv = [v for v in vals.values() if v is not None]
+        need(vv, "값이 있는 시·도가 없습니다")
         if o.get("diverging") or o.get("center") is not None:
             c = float(o.get("center") or 0)
             span = max(max(vv) - c, c - min(vv), 1e-9)
             cmap, norm = DIV, TwoSlopeNorm(vcenter=c, vmin=c - span, vmax=c + span)
         else:
             cmap, norm = SEQ, Normalize(min(vv) if min(vv) < 0 else 0, max(vv))
-        fill = {}
+        fill, edges = {}, {}
         for n, v in vals.items():
             if v is not None:
                 rgba = cmap(norm(v))
                 fill[n] = "#%02X%02X%02X" % tuple(int(255 * c) for c in rgba[:3])
+        for g in groups:
+            if len(g["members"]) > 1:  # 통합 지역은 안쪽 경계선을 지워 한 지역으로 보이게
+                for n in g["members"]:
+                    if n in fill and n in ("광주",):
+                        edges[n] = fill[n]
         missing = [n for n in SIDO if n not in vals]
         if missing:
             notes.append(f"값이 없는 시·도(회색): {', '.join(missing)}")
+        SMALL_L = {"서울": 38.05, "인천": 37.45, "세종": 36.88, "대전": 36.08, "광주": 35.30}
+        # 이끌선과 겹치지 않게 옮긴 이름 자리(경기는 서울 선, 충남은 세종·대전 선, 경북은 대구 선을 피함)
+        LABEL_AT = {"경기": (127.22, 37.86), "제주": (126.55, 33.12), "충남": (126.72, 36.47), "경북": (128.78, 36.52)}
+        SMALL_R = {"대구": 36.25, "울산": 35.72, "부산": 35.12}
         with figure(4.4, o) as fig:
             top = top_for(fig, title, sub, o, False)
-            ax = fig.add_axes([0.05, 0.02, 0.6, top - 0.04])
-            _base_map(ax, fill)
+            ax = fig.add_axes([0.02, 0.02, 0.64, top - 0.04])
+            _base_map(ax, fill, edges=edges, xlim=(123.6, 131.4))
             if o.get("show_labels", True) is not False:
-                for n, v in vals.items():
-                    if v is None or n not in _geo():
+                for g in groups:
+                    if g["v"] is None:
                         continue
+                    if len(g["members"]) > 1:  # 통합 지역 — 가장 큰 경계의 가운데에 한 번
+                        main = max(g["members"], key=lambda n: len(max(_polys(_geo()[n]), key=len)))
+                        x, y = _centroid(main)
+                        ax.text(x, y, f"{g['label']}\n{st.fmt(g['v'])}", ha="center", va="center", fontsize=6.8, color=st.ink_on(fill.get(main, "#E7EAF0")), linespacing=1.1, zorder=6)
+                        continue
+                    n = g["members"][0]
                     x, y = _centroid(n)
-                    if n in ("서울", "인천", "대전", "광주", "대구", "울산", "부산", "세종"):
+                    if n in SMALL_L or n in SMALL_R:  # 작은 시·도는 이끌선 이름표(지도 밖 왼쪽·오른쪽)
+                        left = n in SMALL_L
+                        lx, ly = (125.25, SMALL_L[n]) if left else (130.05, SMALL_R[n])
+                        ax.plot([x, lx + (0.05 if left else -0.05)], [y, ly], color="#7F7F7F", lw=0.6, zorder=5)
+                        ax.text(lx, ly, f"{n} {st.fmt(g['v'])}", ha="right" if left else "left", va="center", fontsize=6.8, color=st.INK, zorder=6)
                         continue
-                    ax.text(x, y, f"{n}\n{st.fmt(v)}", ha="center", va="center", fontsize=6.8, color=st.ink_on(fill.get(n, "#E7EAF0")), linespacing=1.1)
-            # 작은 광역시는 오른쪽 표로
-            small = [(n, vals[n]) for n in ("서울", "인천", "세종", "대전", "광주", "대구", "울산", "부산") if n in vals]
-            tx = fig.add_axes([0.66, 0.05, 0.32, top - 0.08])
+                    x, y = LABEL_AT.get(n, (x, y))
+                    fc = fill.get(n, "#E7EAF0")  # 이름 뒤에 그 지역 색 바탕 — 경계선이 글자를 가르지 않게(제주는 섬 아래에 바탕 없이)
+                    if n == "제주":
+                        ax.text(x, y, f"{n} {st.fmt(g['v'])}", ha="center", va="top", fontsize=6.8, color=st.INK, zorder=6)
+                        continue
+                    ax.text(x, y, f"{n}\n{st.fmt(g['v'])}", ha="center", va="center", fontsize=6.8, color=st.ink_on(fc), linespacing=1.1, zorder=6,
+                            bbox=dict(facecolor=fc, edgecolor="none", pad=0.15, alpha=0.95))
+            tx = fig.add_axes([0.68, 0.05, 0.30, top - 0.08])
             tx.axis("off")
-            ranked = sorted(((n, v) for n, v in vals.items() if v is not None), key=lambda p: -p[1])
+            ranked = sorted((g for g in groups if g["v"] is not None), key=lambda g: -g["v"])
             tx.text(0, 1, f"순위{f' ({unit})' if unit else ''}", fontsize=8, fontweight="bold", color=st.INK, va="top", transform=tx.transAxes)
-            for k, (n, v) in enumerate(ranked[:17]):
+            for k, g in enumerate(ranked[:17]):
                 y = 0.93 - k * 0.054
-                tx.add_patch(Polygon([(0, y - 0.018), (0.06, y - 0.018), (0.06, y + 0.018), (0, y + 0.018)], closed=True, facecolor=fill[n], transform=tx.transAxes))
-                tx.text(0.09, y, n, fontsize=7.4, va="center", transform=tx.transAxes, color=st.INK)
-                tx.text(0.62, y, st.fmt(v), fontsize=7.4, va="center", ha="right", transform=tx.transAxes, color=st.INK, fontweight="bold" if k < 3 else "normal")
-            if small:
-                notes.append("지도에 이름이 작게 보이는 광역시 값은 오른쪽 순위 표에 있습니다")
+                col = fill.get(g["members"][0], "#E7EAF0")
+                tx.add_patch(Polygon([(0, y - 0.018), (0.06, y - 0.018), (0.06, y + 0.018), (0, y + 0.018)], closed=True, facecolor=col, transform=tx.transAxes))
+                tx.text(0.09, y, f"{k + 1}. {g['label']}", fontsize=7.4, va="center", transform=tx.transAxes, color=st.INK)
+                tx.text(0.72, y, st.fmt(g["v"]), fontsize=7.4, va="center", ha="right", transform=tx.transAxes, color=st.INK, fontweight="bold" if k < 3 else "normal")
+            if any(len(g["members"]) > 1 for g in groups):
+                notes.append("통합 지역(" + ", ".join(g["label"] for g in groups if len(g["members"]) > 1) + ")은 옛 경계 두 곳을 같은 색으로 칠하고 이름·순위는 한 번만 씁니다")
             put_title(fig, title, sub, o)
             png = to_png(fig)
         return Result(png, notes, table=(["시·도", f"값{f'({unit})' if unit else ''}"], rows))

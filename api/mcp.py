@@ -7,8 +7,11 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import io
 import json
+import zlib
 import os
 import sys
 import time
@@ -23,7 +26,7 @@ from chartkit.core import setup_fonts  # noqa: E402
 from chartkit.excel import build as excel_build  # noqa: E402
 from chartkit.errors import ChartInputError  # noqa: E402
 
-SERVER = {"name": "chart-mcp", "version": "1.1.0"}
+SERVER = {"name": "chart-mcp", "version": "1.2.0"}
 SUPPORTED = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05", "2024-10-07"]
 GATE_KEYS = [k.strip() for k in os.environ.get("MCP_GATE_KEYS", "").split(",") if k.strip()]
 GATE_MODE = os.environ.get("MCP_GATE_MODE", "observe")
@@ -48,7 +51,8 @@ TOOLS = [
         "description": (
             "차트 한 개를 그린다. type은 코드(R-05) 또는 chart_type(km). data는 차트별 입력 객체 — 모양은 list_chart_types(code)의 example.data를 따른다. "
             "계산이 필요한 차트(카플란-마이어·log-rank·4PL·PK·추세선·관리도·상관계수 등)는 서버가 계산해 computed와 notes로 돌려준다. "
-            "output: image(기본 — 그림을 바로 보여 줌), base64(그림을 글자로 — 페이지·다른 서버용), xlsx(엑셀 원본만). include_xlsx=true면 엑셀 원본(base64)도 함께."),
+            "output: image(기본 — 그림을 바로 보여 줌), base64(그림을 글자로 — 페이지·다른 서버용), xlsx(엑셀 원본만). include_xlsx=true면 엑셀 원본(base64)도 함께. "
+            "결과의 png_url·xlsx_url은 24시간 동안 게이트키 없이 열리는 받기 주소다 — 파일로 저장할 때는 이 주소를 내려받는다(curl -o 등)."),
         "inputSchema": {"type": "object", "required": ["type", "data"], "properties": {
             "type": {"type": "string", "description": "차트 코드 또는 chart_type"},
             "data": {"type": ["object", "string"], "description": "차트별 입력(예: {categories, series} / {groups:[...]} / {links:[...]} / {regions:[...]})"},
@@ -79,6 +83,39 @@ TOOLS = [
 ]
 
 
+# ---------- 받아 쓰는 주소(2026-11-24) ----------
+# 계정 채팅의 Claude는 draw_chart 결과의 그림을 파일로 옮길 방법이 마땅치 않다(작은 결과는 글로만 들어와 다시 옮겨 적어야 하고,
+# 셸에서 게이트키를 실어 부르면 자동 승인에 막힌다). 그래서 그린 입력을 서명한 주소(png_url·xlsx_url)를 함께 돌려준다.
+# 주소에는 게이트키가 없고, 서명(서버 키로 만든 HMAC)과 만료 시각(24시간)으로만 열린다. 열 때 같은 입력으로 다시 그린다.
+LINK_TTL = 24 * 3600
+_HOST = {"v": os.environ.get("PUBLIC_HOST", "chart-mcp-one.vercel.app")}
+
+
+def _link_key() -> bytes:
+    sec = os.environ.get("CHART_LINK_SECRET") or ("link|" + ",".join(sorted(GATE_KEYS)))
+    return hashlib.sha256(sec.encode()).digest()
+
+
+def make_link(a: dict, fmt: str) -> str | None:
+    body = {k: a.get(k) for k in ("type", "data", "title", "subtitle", "unit", "options") if a.get(k) is not None}
+    body["exp"] = int(time.time()) + LINK_TTL
+    body["fmt"] = fmt
+    tok = base64.urlsafe_b64encode(zlib.compress(json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode(), 9)).decode().rstrip("=")
+    sig = hmac.new(_link_key(), tok.encode(), hashlib.sha256).hexdigest()[:32]
+    url = f"https://{_HOST['v']}/api/mcp?f={tok}&s={sig}"
+    return url if len(url) <= 7500 else None
+
+
+def open_link(tok: str, sig: str):
+    good = hmac.new(_link_key(), tok.encode(), hashlib.sha256).hexdigest()[:32]
+    if not hmac.compare_digest(good, sig or ""):
+        return None, "서명이 맞지 않습니다"
+    body = json.loads(zlib.decompress(base64.urlsafe_b64decode(tok + "=" * (-len(tok) % 4))).decode())
+    if int(body.get("exp", 0)) < time.time():
+        return None, "주소가 만료됐습니다(24시간) — draw_chart를 다시 부르세요"
+    return body, None
+
+
 def _text(obj) -> dict:
     return {"type": "text", "text": obj if isinstance(obj, str) else json.dumps(obj, ensure_ascii=False)}
 
@@ -107,6 +144,10 @@ def call_tool(name: str, a: dict) -> dict:
         meta = {"type": r.meta["code"] or r.meta["chart_type"], "name": r.meta["name"], "notes": r.notes, "computed": r.computed,
                 "png_bytes": len(r.png), "ms": int((time.time() - t0) * 1000)}
         xlsx = chart_api.to_xlsx(r) if (out == "xlsx" or _bool(a.get("include_xlsx"))) else None
+        pu, xu = make_link(a, "png"), make_link(a, "xlsx")
+        if pu:
+            meta["png_url"], meta["xlsx_url"] = pu, xu
+            meta["link_note"] = "png_url·xlsx_url은 24시간 동안 열리는 받기 주소입니다(게이트키 없이 서명으로 열림). 파일로 저장하려면 이 주소를 내려받으세요."
         if xlsx is not None:
             meta["xlsx_bytes"] = len(xlsx)
         if out == "base64":
@@ -219,6 +260,30 @@ async def app(scope, receive, send):
         return
     method = scope.get("method", "GET")
     headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
+    if headers.get("host") and not headers["host"].startswith(("localhost", "127.")):
+        _HOST["v"] = headers["host"]
+    if method == "GET" and "f=" in scope.get("query_string", b"").decode():
+        q = parse_qs(scope.get("query_string", b"").decode())
+        try:
+            body, err = open_link((q.get("f") or [""])[0], (q.get("s") or [""])[0])
+        except Exception as e:  # noqa: BLE001
+            body, err = None, f"주소를 읽지 못했습니다: {type(e).__name__}"
+        if err:
+            await _send(send, 403, {"error": err})
+            return
+        try:
+            r = chart_api.draw(body.get("type"), body.get("data"), title=body.get("title"), subtitle=body.get("subtitle"), unit=body.get("unit"), options=body.get("options"))
+        except Exception as e:  # noqa: BLE001
+            await _send(send, 400, {"error": f"{type(e).__name__}: {e}"})
+            return
+        if body.get("fmt") == "xlsx":
+            data, ctype, ext = chart_api.to_xlsx(r), b"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx"
+        else:
+            data, ctype, ext = r.png, b"image/png", "png"
+        await send({"type": "http.response.start", "status": 200, "headers": [(b"content-type", ctype), (b"cache-control", b"private, max-age=3600"),
+                                                                              (b"content-disposition", f'inline; filename="chart.{ext}"'.encode())]})
+        await send({"type": "http.response.body", "body": data})
+        return
     if method == "OPTIONS":
         await _send(send, 204, None, [(b"access-control-allow-methods", b"POST, GET, OPTIONS"),
                                       (b"access-control-allow-headers", b"content-type, accept, mcp-protocol-version, mcp-session-id")])
