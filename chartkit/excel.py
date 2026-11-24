@@ -111,12 +111,12 @@ def _show_axes(ch):
                     ax.delete = False
                 except Exception:  # noqa: BLE001
                     pass
-            # 주 눈금선: 옅은 회색(배경 65% — A6A6A6) 점선(사용자 지정 2026-11-24 — 눈금선은 두되 막대·숫자가 더 잘 보이게)
+            # 주 눈금선: 연한 회색(D9D9D9 — Excel '배경 1, 15% 더 어둡게') 실선 0.75pt(사용자 지정 2026-11-24 — 엑셀·PPT·그림 통일)
             gl = getattr(ax, "majorGridlines", None) if ax is not None else None
             if gl is not None:
                 from openpyxl.chart.shapes import GraphicalProperties
                 from openpyxl.drawing.line import LineProperties
-                gl.spPr = GraphicalProperties(ln=LineProperties(solidFill="A6A6A6", prstDash="sysDot", w=9525))
+                gl.spPr = GraphicalProperties(ln=LineProperties(solidFill="D9D9D9", prstDash="solid", w=9525))
 
 
 _C15 = "http://schemas.microsoft.com/office/drawing/2012/chart"
