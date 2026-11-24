@@ -1,0 +1,9 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "api/mcp.py": {
+      "maxDuration": 60,
+      "excludeFiles": "{tests/**,orig_pkg/**,**/__pycache__/**,docs/**}"
+    }
+  }
+}
