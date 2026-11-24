@@ -99,6 +99,85 @@ def _picture(ws, png, anchor):
     ws.add_image(img, anchor)
 
 
+def _show_axes(ch):
+    """openpyxl 3.1은 축의 delete 값을 비워 두면 XML에 쓰지 않고, Excel은 그 축을 '삭제됨'으로 읽어 숨긴다
+    (LibreOffice는 그대로 보여 줘 점검에서 안 보였다 — 2026-11-24 사용자 Excel 실측: 간트 축이 없음).
+    일부러 숨긴 축(delete=True)만 두고 나머지는 모두 delete=False로 적는다. 합친 차트(bar += line)의 축도 같다."""
+    for c in [ch] + list(getattr(ch, "_charts", []) or []):
+        for nm in ("x_axis", "y_axis", "z_axis"):
+            ax = getattr(c, nm, None)
+            if ax is not None and getattr(ax, "delete", None) is None:
+                try:
+                    ax.delete = False
+                except Exception:  # noqa: BLE001
+                    pass
+
+
+_C15 = "http://schemas.microsoft.com/office/drawing/2012/chart"
+
+
+def _esc(t):
+    return str(t).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def finish(data: bytes, wb) -> bytes:
+    """저장한 통합문서에 openpyxl이 못 쓰는 '셀 값 라벨'(c15:datalabelsRange)을 넣는다.
+    wb._range_labels: [{sheet, series(계열 이름), ref(라벨 셀 범위), texts}]"""
+    items = getattr(wb, "_range_labels", None) or []
+    if not items:
+        return data
+    import re
+    import zipfile
+    zin = zipfile.ZipFile(io.BytesIO(data))
+    out = io.BytesIO()
+    zout = zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED)
+    for info in zin.infolist():
+        b = zin.read(info.filename)
+        if info.filename.startswith("xl/charts/chart") and info.filename.endswith(".xml"):
+            x = b.decode("utf-8")
+            changed = False
+            for it in items:
+                sh = "'" + it["sheet"] + "'!"
+                def rep(m, it=it, sh=sh):
+                    # 업무 파일 변환기(xlsx-bar.js cellLbl)와 같은 꼴 — 사용자 Excel에서 합계 라벨로 확인된 구조:
+                    # 점마다 dLbl(글자 = CELLRANGE 필드) + 계열 dLbls 끝 showDataLabelsRange + 계열 끝 datalabelsRange(캐시는 차트 이름공간)
+                    ser = m.group(0)
+                    if f"<v>{_esc(it['series'])}</v>" not in ser or sh not in ser:
+                        return ser
+                    A = 'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"'
+                    rp = (f'<a:latin typeface="{FONT}"/><a:ea typeface="{FONT}"/><a:cs typeface="{FONT}"/>')
+                    show = ('<showLegendKey val="0"/><showVal val="0"/><showCatName val="0"/><showSerName val="0"/>'
+                            '<showPercent val="0"/><showBubbleSize val="0"/>')
+                    nofill = '<spPr><a:noFill/><a:ln><a:noFill/></a:ln></spPr>'
+                    pts = ""
+                    for i in range(len(it["texts"])):
+                        g = "{%08X-2B3C-4D5E-8F90-%012X}" % (abs(hash(it["ref"])) & 0xFFFFFFFF, 1000 + i)
+                        pts += (f'<dLbl><idx val="{i}"/><layout/><tx><rich><a:bodyPr wrap="none" lIns="0" rIns="0"/><a:lstStyle/><a:p>'
+                                f'<a:fld id="{g}" type="CELLRANGE"><a:rPr lang="ko-KR" sz="900" b="0"><a:solidFill><a:srgbClr val="404040"/></a:solidFill>{rp}</a:rPr>'
+                                f'<a:t>[CELLRANGE]</a:t></a:fld></a:p></rich></tx>{nofill}<dLblPos val="inBase"/>{show}'
+                                f'<extLst><ext uri="{{CE6537A1-D6FC-4f65-9D91-7224C49458BB}}" xmlns:c15="{_C15}"><c15:dlblFieldTable/>'
+                                f'<c15:showDataLabelsRange val="1"/></ext></extLst></dLbl>')
+                    txpr = (f'<txPr><a:bodyPr wrap="none" lIns="0" rIns="0"/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="900" b="0"><a:solidFill>'
+                            f'<a:srgbClr val="404040"/></a:solidFill>{rp}</a:defRPr></a:pPr><a:endParaRPr lang="ko-KR"/></a:p></txPr>')
+                    dl = (f'<dLbls {A}>{pts}{nofill}{txpr}<dLblPos val="inBase"/>{show}'
+                          f'<extLst><ext uri="{{CE6537A1-D6FC-4f65-9D91-7224C49458BB}}" xmlns:c15="{_C15}"><c15:showDataLabelsRange val="1"/>'
+                          f'<c15:showLeaderLines val="0"/></ext></extLst></dLbls>')
+                    cache = "".join(f'<pt idx="{i}"><v>{_esc(t)}</v></pt>' for i, t in enumerate(it["texts"]))
+                    ext_ser = (f'<extLst><ext uri="{{02D57815-91ED-43cb-92C2-25804820EDAC}}" xmlns:c15="{_C15}">'
+                               f'<c15:datalabelsRange><c15:f>{_esc(it["ref"])}</c15:f><c15:dlblRangeCache>'
+                               f'<ptCount val="{len(it["texts"])}"/>{cache}</c15:dlblRangeCache></c15:datalabelsRange></ext></extLst>')
+                    ser = re.sub(r"<dLbls>.*?</dLbls>", lambda d: dl, ser, 1, flags=re.S)
+                    return ser.replace("</ser>", ext_ser + "</ser>")
+                x2 = re.sub(r"<ser>.*?</ser>", rep, x, flags=re.S)
+                if x2 != x:
+                    x, changed = x2, True
+            if changed:
+                b = x.encode("utf-8")
+        zout.writestr(info, b)
+    zout.close()
+    return out.getvalue()
+
+
 # ── 종류별 ─────────────────────────────────────────────
 def _category(ws, r, ct, head, rows, last):
     """head = [구분, 계열...] — 꺾은선·영역·막대·혼합·범프·스트림."""
@@ -384,10 +463,22 @@ def _range_bars(ws, r, ct, head, rows, last):
     elif ct in ("gantt",):
         ws.cell(T0, col, "시작(일련번호)")
         ws.cell(T0, col + 1, "기간(일)")
-        for i, x in enumerate(rows):
-            s, e = date.fromisoformat(x[2]), date.fromisoformat(x[3])
+        ws.cell(T0, col + 2, "글자 자리")
+        ws.cell(T0, col + 3, "막대 옆 글")
+        spans = [(date.fromisoformat(x[2]), date.fromisoformat(x[3])) for x in rows]
+        one_year = len({d.year for se in spans for d in se}) == 1
+        total = max(e for _, e in spans) - min(s for s, _ in spans)
+        room = max(20, round(total.days * 0.2))
+        for i, (s, e) in enumerate(spans):
             ws.cell(T0 + 1 + i, col, (s - date(1899, 12, 30)).days).number_format = "yy.mm.dd"
             ws.cell(T0 + 1 + i, col + 1, max((e - s).days, 1))
+            ws.cell(T0 + 1 + i, col + 2, room)
+            f = (lambda d: f"{d.month}/{d.day}") if one_year else (lambda d: f"{d:%y}.{d.month}.{d.day}")
+            ws.cell(T0 + 1 + i, col + 3, f(s) if s == e else f"{f(s)}~{f(e)}")
+        ws.cell(T0, col + 4, "축 형식")
+        ws.cell(T0 + 1, col + 4, 'm"월"' if one_year else "yy.mm")
+        # 눈금은 30.4일 간격이라 달 첫날에서 시작하면 2월이 짧아 '1월'이 두 번 찍힌다 — 첫날+2일에서 시작하면 눈금이 늘 그 달 초(1~4일)에 온다
+        ws.cell(T0 + 2, col + 4, (date(min(s for s, _ in spans).year, min(s for s, _ in spans).month, 1) - date(1899, 12, 30)).days + 2)
     else:  # football_field: 방법·하단·상단·중앙
         ws.cell(T0, col, "하단")
         ws.cell(T0, col + 1, "폭(상단-하단)")
@@ -408,11 +499,34 @@ def _range_bars(ws, r, ct, head, rows, last):
     if ct == "funnel":
         _labels(val, "ctr")
     ch.series.append(val)
+    if ct == "gantt":
+        # 막대 오른쪽에 기간 글(2026-11-24 — 엑셀 간트에 일정 글이 없다는 지적). 투명한 '글자 자리' 계열을 막대 끝에 잇고,
+        # 그 계열의 라벨을 셀 범위('막대 옆 글' 열)에서 가져온다(Excel 2013+ '셀 값' 라벨 — 저장 뒤 finish()가 XML에 넣음).
+        gap = Series(_ref(ws, col + 2, T0 + 1, col + 2, last), title=ws.cell(T0, col + 2).value)
+        gap.graphicalProperties.noFill = True
+        gap.graphicalProperties.line.noFill = True
+        gap.dLbls = DataLabelList()
+        gap.dLbls.showVal = False
+        gap.dLbls.showSerName = gap.dLbls.showCatName = gap.dLbls.showLegendKey = gap.dLbls.showPercent = False
+        gap.dLbls.position = "inBase"
+        ch.series.append(gap)
+        cl = get_column_letter(col + 3)
+        ws.parent.__dict__.setdefault("_range_labels", []).append(
+            {"sheet": ws.title, "series": ws.cell(T0, col + 2).value, "ref": f"'{ws.title}'!${cl}${T0 + 1}:${cl}${last}",
+             "texts": [ws.cell(T0 + 1 + i, col + 3).value for i in range(len(rows))]})
     ch.set_categories(_ref(ws, 1, T0 + 1, 1, last))
     if ct == "gantt":
         starts = [ws.cell(T0 + 1 + i, col).value for i in range(len(rows))]
-        ch.y_axis.scaling.min = min(starts) - 3
-        ch.y_axis.number_format = "yy.mm"
+        ends = [ws.cell(T0 + 1 + i, col).value + ws.cell(T0 + 1 + i, col + 1).value for i in range(len(rows))]
+        ch.y_axis.scaling.min = ws.cell(T0 + 2, col + 4).value
+        ch.y_axis.scaling.max = max(e + ws.cell(T0 + 1 + i, col + 2).value for i, e in enumerate(ends))
+        ch.y_axis.number_format = ws.cell(T0 + 1, col + 4).value
+        for k in range(3):
+            ws.cell(T0 + k, col + 4).value = None
+        ch.y_axis.crosses = "max"  # 항목 순서를 뒤집으면 날짜 축이 위로 가므로 아래로 내림
+        for k, wdt in enumerate((14, 9, 11, 16)):
+            ws.column_dimensions[get_column_letter(col + k)].width = wdt
+        ch.y_axis.majorUnit = 30.4 if (max(ends) - min(starts)) <= 400 else 91.3
     elif ct == "football_field":
         lo = min(x[1] for x in rows)
         ch.y_axis.scaling.min = lo * 0.85
@@ -817,6 +931,7 @@ def build(r, wb=None, sheet: str = "차트"):
     anchor_col = get_column_letter(special_col) if special_col else get_column_letter(max(len(head), 1) + 2 + (5 if ct in ("waterfall", "funnel", "football_field", "gantt", "errorbar", "errorbar_bar", "forest", "control_chart") else 0))
     if charts:
         for k, ch in enumerate(charts if isinstance(charts, list) else [charts]):
+            _show_axes(ch)
             ws.add_chart(ch, f"{anchor_col}{T0 + k * 19}")
     if not charts or ct in HEAT:
         _picture(ws, r.png, f"{anchor_col}{T0 if not charts else T0 + 40}")
@@ -836,4 +951,4 @@ def build(r, wb=None, sheet: str = "차트"):
         return None
     b = io.BytesIO()
     wb.save(b)
-    return b.getvalue()
+    return finish(b.getvalue(), wb)

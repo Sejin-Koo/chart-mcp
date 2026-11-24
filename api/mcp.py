@@ -23,10 +23,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from chartkit import api as chart_api  # noqa: E402
 from chartkit.core import setup_fonts  # noqa: E402
-from chartkit.excel import build as excel_build  # noqa: E402
+from chartkit.excel import build as excel_build, finish as excel_finish  # noqa: E402
 from chartkit.errors import ChartInputError  # noqa: E402
 
-SERVER = {"name": "chart-mcp", "version": "1.2.0"}
+SERVER = {"name": "chart-mcp", "version": "1.2.1"}
 SUPPORTED = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05", "2024-10-07"]
 GATE_KEYS = [k.strip() for k in os.environ.get("MCP_GATE_KEYS", "").split(",") if k.strip()]
 GATE_MODE = os.environ.get("MCP_GATE_MODE", "observe")
@@ -194,7 +194,7 @@ def call_tool(name: str, a: dict) -> dict:
             wb.properties.title = str(a["title"])[:200]
         bio = io.BytesIO()
         wb.save(bio)
-        x = bio.getvalue()
+        x = excel_finish(bio.getvalue(), wb)
         return {"content": [_text({"ok": True, "sheets": made, "warnings": warns, "xlsx_bytes": len(x),
                                    "xlsx_base64": base64.b64encode(x).decode()})]}
     return {"content": [_text(f"알 수 없는 도구: {name}")], "isError": True}

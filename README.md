@@ -45,3 +45,7 @@ python -m chartkit example R-05 > spec.json
 python -m chartkit draw spec.json out.png out.xlsx
 python tests/smoke.py   # 75종 전부 그리기 + 엑셀
 ```
+
+### 1.2.1 (2026-11-24)
+- 엑셀 원본의 차트 축이 Excel에서 안 보이던 문제 수정 — openpyxl 3.1은 축 `delete` 값을 비워 두면 쓰지 않고, Excel은 그 축을 지운 것으로 읽는다(LibreOffice는 보여 줘서 점검에서 놓침). 일부러 숨긴 축(스파크라인 등)만 두고 모든 축에 `delete=0`을 적는다.
+- 간트(G-01) 엑셀 차트: 막대 오른쪽에 기간 글(셀 값 라벨 — '막대 옆 글' 열), 날짜 축을 아래로, 한 해 안이면 'n월' 눈금.
