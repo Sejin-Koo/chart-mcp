@@ -171,7 +171,7 @@ def _pipeline(args, o):
         for j, p in enumerate(phases):
             ax.text(j + 0.5, -0.75, p, ha="center", va="center", fontsize=7.8, color=st.INK2, fontweight="bold")
             if j:
-                ax.axvline(j, color=st.GRID, lw=0.8, zorder=0)
+                ax.axvline(j, zorder=0, **st.GRID_KW)
         for i, r in enumerate(rows):
             c = gc[r["g"]]
             end = r["k"] + (r["p"] if r["p"] is not None else 0.85)

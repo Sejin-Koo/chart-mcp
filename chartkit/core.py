@@ -90,7 +90,7 @@ def setup_fonts() -> dict:
         "font.family": family, "font.size": st.FONT_SIZE, "axes.unicode_minus": False, "svg.fonttype": "none",
         "axes.edgecolor": st.AXIS, "axes.labelcolor": st.INK2, "axes.labelsize": st.FONT_SIZE,
         "axes.spines.top": False, "axes.spines.right": False, "axes.grid": False, "axes.axisbelow": True,
-        "grid.color": st.GRID, "grid.linewidth": 0.7, "xtick.color": st.INK2, "ytick.color": st.INK2,
+        "grid.color": st.GRID_LINE, "grid.linewidth": 0.8, "grid.linestyle": ":", "xtick.color": st.INK2, "ytick.color": st.INK2,
         "xtick.labelsize": st.FONT_SIZE - 0.5, "ytick.labelsize": st.FONT_SIZE - 0.5, "xtick.major.size": 0, "ytick.major.size": 0,
         "legend.frameon": False, "legend.fontsize": st.FONT_SIZE - 0.5, "figure.facecolor": "white", "savefig.facecolor": "white",
         "axes.prop_cycle": matplotlib.cycler(color=st.PALETTE),
@@ -170,9 +170,9 @@ def style_axes(ax, *, grid: str = "y", left_spine: bool = False) -> None:
     ax.spines["left"].set_visible(left_spine)
     ax.spines["bottom"].set_color(st.AXIS)
     if grid in ("y", "both"):
-        ax.yaxis.grid(True, color=st.GRID)
+        ax.yaxis.grid(True, **st.GRID_KW)
     if grid in ("x", "both"):
-        ax.xaxis.grid(True, color=st.GRID)
+        ax.xaxis.grid(True, **st.GRID_KW)
     ax.tick_params(length=0)
 
 
