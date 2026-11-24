@@ -136,6 +136,14 @@ def draw(ct: str, args: dict, o: dict) -> Result:
             rows.append([raw, v])
         if unknown:
             raise ChartInputError(f"시·도 이름을 알 수 없습니다: {', '.join(unknown)}", hint=f"다음 중 하나로 넣으세요: {', '.join(SIDO)}")
+        # 광주·전남을 따로 넣었는데 값이 똑같으면 2026-07 통합 뒤의 '전남광주' 값을 두 곳에 나눠 넣은 것으로 보고 한 표시 단위로 합친다
+        # (2026-11-24 업무 에이전트 지도 실측: 순위표에 광주·전남이 81,350대로 두 줄 나옴). 끄기 options.merge_equal=false
+        gj = [g for g in groups if g["members"] in (["광주"], ["전남"])]
+        if len(gj) == 2 and gj[0]["v"] == gj[1]["v"] and str(o.get("merge_equal", True)).lower() not in ("false", "0", "no"):
+            k0 = groups.index(gj[0])
+            groups = [g for g in groups if g not in gj]
+            groups.insert(k0, {"label": "전남광주", "members": ["광주", "전남"], "v": gj[0]["v"]})
+            notes.append("광주·전남 값이 같아 통합 지역 '전남광주' 한 줄로 표시했습니다(따로 그리려면 options.merge_equal=false).")
         vv = [v for v in vals.values() if v is not None]
         need(vv, "값이 있는 시·도가 없습니다")
         if o.get("diverging") or o.get("center") is not None:
