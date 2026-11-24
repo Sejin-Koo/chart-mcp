@@ -34,7 +34,7 @@ GATE_MODE = os.environ.get("MCP_GATE_MODE", "observe")
 INSTRUCTIONS = (
     "보고서용 차트 75종을 그리는 서버입니다(맑은 고딕, 계정 보고서 색 규칙). "
     "list_chart_types로 코드(예: R-05)와 예시 입력을 확인한 뒤 draw_chart에 type·data를 넣어 부르세요. "
-    "막대·꺾은선·원 같은 기본 그래프 28종과 도식 3종은 이 서버가 아니라 보고서 변환기(```chart·```diagram)가 맡습니다."
+    "막대·꺾은선·원 같은 기본 그래프 28종과 도식(흐름도·조직도·SWOT·로드맵 등)은 이 서버가 아니라 보고서 변환기(```chart·```diagram)가 맡습니다."
 )
 
 TOOLS = [
@@ -130,7 +130,7 @@ def call_tool(name: str, a: dict) -> dict:
             return {"content": [_text(chart_api.list_types(code=a["code"]))]}
         items = chart_api.list_types(tag=a.get("tag"))
         return {"content": [_text({"count": len(items), "types": items,
-                                   "note": "code를 주면 예시 입력을 돌려줍니다. 기본 그래프 28종(막대·꺾은선·원 등)과 도식 3종은 보고서 변환기가 맡습니다."})]}
+                                   "note": "code를 주면 예시 입력을 돌려줍니다. 기본 그래프 28종(막대·꺾은선·원 등)과 도식(흐름도·조직도·스윔레인·SWOT·2×2·로드맵 등)은 보고서 변환기가 맡습니다."})]}
     if name == "chart_server_status":
         fs = setup_fonts()
         return {"content": [_text({"server": SERVER, "font": {"family": fs.get("family"), "malgun": bool(fs.get("regular")),
