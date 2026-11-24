@@ -457,7 +457,8 @@ def finish(data: bytes, wb) -> bytes:
                             '<showPercent val="0"/><showBubbleSize val="0"/>')
                     nofill = '<spPr><a:noFill/><a:ln><a:noFill/></a:ln></spPr>'
                     col, sz = it.get("color", "404040"), it.get("size", 900)
-                    posx = f'<dLblPos val="{it["pos"]}"/>' if it.get("pos", "inBase") else ""
+                    pz = it.get("pos", "inBase")
+                    posx = f'<dLblPos val="{pz}"/>' if pz else ""
                     pts = ""
                     for i in range(len(it["texts"])):
                         g = "{%08X-2B3C-4D5E-8F90-%012X}" % (abs(hash(it["ref"])) & 0xFFFFFFFF, 1000 + i)
