@@ -153,12 +153,16 @@ def _waffle(data, title, sub, o, w, h):
             r, c = divmod(idx, 10)
             ax.add_patch(patches.FancyBboxPatch((c, 9 - r), 0.86, 0.86, boxstyle="round,pad=0,rounding_size=0.12", fc=col, ec="none"))
         ax.set_xlim(-0.2, 10); ax.set_ylim(-0.2, 10)
+        # 범례: 이름 · 비율 · 칠한 칸 수. 값이 이미 비율(합 100)이면 값은 비율과 같으므로 다시 쓰지 않는다.
+        # (1.2.5까지는 '(값)'을 반올림해 써서 62.4% → "(62)"인데 칸은 최대 잉여 배분으로 63칸 — 칸 수로 읽히는 숫자가 그림과 어긋났다)
+        is_pct = abs(tot - 100) <= 0.5
         for i, (c_, v, n) in enumerate(zip(cats, vals, cells)):
+            vs = "" if is_pct else f"  ({v:,.0f})" if float(v).is_integer() else f"  ({v:,.1f})"
             fig.text(0.63, tm - 0.12 - i * 0.075, "■", color=C[i], fontsize=16, va="center")
-            fig.text(0.66, tm - 0.12 - i * 0.075, f"{c_}  {raw[i]:.1f}%  ({v:,.0f})", fontsize=12, va="center", color=st.INK)
+            fig.text(0.66, tm - 0.12 - i * 0.075, f"{c_}  {raw[i]:.1f}%{vs}  · {n}칸", fontsize=12, va="center", color=st.INK)
         put_title(fig, ax, title, sub)
         res = to_bytes(fig)
-    return res, ["한 칸 = 1%. 반올림 합이 100칸이 되도록 최대 잉여 방식으로 배분"], {"cells": dict(zip(cats, cells))}
+    return res, ["한 칸 = 1%. 반올림 합이 100칸이 되도록 최대 잉여 방식으로 배분 — 범례의 칸 수가 실제로 칠한 칸"], {"cells": dict(zip(cats, cells))}
 
 
 def _grid_xyz(data):

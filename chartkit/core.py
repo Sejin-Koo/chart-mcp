@@ -86,8 +86,10 @@ def setup_fonts() -> dict:
                 break
         family = family or "DejaVu Sans"
         _font_state["warning"] = _font_state["warning"] or f"맑은 고딕이 없어 {family}로 그렸습니다"
+    # 맑은 고딕에 없는 글자(빼기 기호 U+2212, ≈ 등)는 matplotlib에 딸린 DejaVu Sans로 글자 단위 대체(1.2.6).
+    # 맑은 고딕 원본에도 U+2212가 없어 화산도 축 제목 "−log10"이 네모로 나왔다.
     matplotlib.rcParams.update({
-        "font.family": family, "font.size": st.FONT_SIZE, "axes.unicode_minus": False, "svg.fonttype": "none",
+        "font.family": [family, "DejaVu Sans"], "font.size": st.FONT_SIZE, "axes.unicode_minus": False, "svg.fonttype": "none",
         "axes.edgecolor": st.AXIS, "axes.labelcolor": st.INK2, "axes.labelsize": st.FONT_SIZE,
         "axes.spines.top": False, "axes.spines.right": False, "axes.grid": False, "axes.axisbelow": True,
         "grid.color": st.GRID_LINE, "grid.linewidth": 0.8, "grid.linestyle": "-", "xtick.color": st.INK2, "ytick.color": st.INK2,
