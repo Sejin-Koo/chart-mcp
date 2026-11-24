@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import io
+import re
 from datetime import date, datetime
 
 from openpyxl import Workbook
@@ -88,6 +89,34 @@ def _labels(s, pos=None, num="#,##0"):
         s.dLbls.position = pos
 
 
+def _nice(lo, hi, n=5):
+    """축 최소값·눈금 간격을 1·2·2.5·5×10^k로(예: 47,900 → 46,000·2,000)."""
+    import math
+    span = (hi - lo) or abs(hi) or 1
+    raw = span / n
+    mag = 10 ** math.floor(math.log10(raw))
+    step = next(m for m in (1, 2, 2.5, 5, 10) if m * mag >= raw) * mag
+    return math.floor(lo / step) * step, step
+
+
+_ISO = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _date_cells(ws, col, r0, r1):
+    """열의 값이 모두 'YYYY-MM-DD' 글자이면 날짜 셀로 바꾸고 짧은 표시 형식을 준다(2026-11-24 — 엑셀 축에 '2026-01-01'이 그대로 찍혀 길었다).
+    달 첫날뿐이면 yyyy.mm, 한 해 안이면 m/d, 여러 해면 yy.m.d. 돌려준 형식을 항목 축에도 쓴다."""
+    vals = [ws.cell(r, col).value for r in range(r0, r1 + 1)]
+    if not vals or not all(isinstance(v, str) and _ISO.match(v) for v in vals):
+        return None
+    ds = [date.fromisoformat(v) for v in vals]
+    fmt = "yyyy.mm" if all(d.day == 1 for d in ds) else ("m/d" if len({d.year for d in ds}) == 1 else "yy.m.d")
+    for r, d in zip(range(r0, r1 + 1), ds):
+        c = ws.cell(r, col, d)
+        c.number_format = fmt
+        c.alignment = Alignment(horizontal="left")
+    return fmt
+
+
 def _ref(ws, c1, r1, c2=None, r2=None):
     return Reference(ws, min_col=c1, min_row=r1, max_col=c2 or c1, max_row=r2 or r1)
 
@@ -124,6 +153,212 @@ _C15 = "http://schemas.microsoft.com/office/drawing/2012/chart"
 
 def _esc(t):
     return str(t).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _ink(hexc):
+    """막대·조각 색 위 글자색 — 파일 변환기 chart-spec.js inkOn과 같은 식(상대 휘도 0.36 초과면 짙은 회색, 아니면 흰색)."""
+    h = (hexc or "").lstrip("#")
+    if not re.fullmatch(r"[0-9A-Fa-f]{6}", h):
+        return "262626"
+    c = []
+    for i in (0, 2, 4):
+        v = int(h[i:i + 2], 16) / 255
+        c.append(v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4)
+    lum = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+    return "262626" if lum > 0.36 else "FFFFFF"
+
+
+_A = 'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"'
+
+
+def _txpr(color):
+    return (f'<txPr {_A}><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr><a:solidFill><a:srgbClr val="{color}"/></a:solidFill>'
+            f'</a:defRPr></a:pPr><a:endParaRPr lang="ko-KR"/></a:p></txPr>')
+
+
+def _ser_fill(ser):
+    """계열 자체 spPr(점·라벨·표식의 spPr 제외)의 채움: ('none'|'rgb'|'alpha'|None, 색)."""
+    m = re.match(r"<idx val=\"\d+\"\s*/><order val=\"\d+\"\s*/>(?:<tx>.*?</tx>)?<spPr>(.*?)</spPr>", ser, re.S)
+    if not m:
+        return None, None
+    sp = m.group(1)
+    if re.match(r"<a:noFill\s*/>", sp):
+        return "none", None
+    f = re.match(r"<a:solidFill><a:srgbClr val=\"(\w+)\"\s*(/>|>(.*?)</a:srgbClr>)", sp, re.S)
+    if f:
+        return ("alpha" if f.group(3) and "alpha" in f.group(3) else "rgb"), f.group(1)
+    return None, None
+
+
+def _points(ser):
+    out = {}
+    for d in re.findall(r"<dPt>(.*?)</dPt>", ser, re.S):
+        i = int(re.search(r"<idx val=\"(\d+)\"", d).group(1))
+        if re.search(r"<spPr><a:noFill", d):
+            out[i] = None
+        else:
+            f = re.search(r"<spPr><a:solidFill><a:srgbClr val=\"(\w+)\"", d)
+            out[i] = f.group(1) if f else ""
+    return out
+
+
+def _set_axis(x, axid, fn):
+    def rep(m):
+        if re.search(rf"<axId val=\"{axid}\"", m.group(2)[:40]):
+            return f"<{m.group(1)}>{fn(m.group(2))}</{m.group(1)}>"
+        return m.group(0)
+    return re.sub(r"<(catAx|valAx|dateAx|serAx)>(.*?)</\1>", rep, x, flags=re.S)
+
+
+def _crosses_max(body):
+    body = re.sub(r"<crosses(?:At)? val=\"[^\"]*\"\s*/>", "", body)
+    return re.sub(r"(<crossAx val=\"\d+\"\s*/>)", r'\1<crosses val="max"/>', body, 1)
+
+
+def _tick_low(pos):
+    def f(body):
+        if "<tickLblPos" in body:
+            return re.sub(r"<tickLblPos val=\"\w+\"\s*/>", f'<tickLblPos val="{pos}"/>', body)
+        ends = [m.end() for p in (r"</majorGridlines>", r"</minorGridlines>", r"</title>", r"<numFmt [^>]*/>", r"<majorTickMark [^>]*/>",
+                                  r"<minorTickMark [^>]*/>", r"<axPos [^>]*/>") for m in re.finditer(p, body)]
+        i = max(ends)
+        return body[:i] + f'<tickLblPos val="{pos}"/>' + body[i:]
+    return f
+
+
+def polish_chart_xml(x: str) -> str:
+    """읽기 좋게 다듬기(1.3.0 — 2026-11-24 사용자 Excel 점검: 범례가 그림 위에 겹침, 남색 막대 위 검은 숫자 등).
+    - 숫자 형식: openpyxl은 numFmt의 필수 속성 sourceLinked를 빼고 써 Excel이 형식을 무시한다("1000" — 쉼표 없음).
+    - 제목·범례: overlay가 없으면 Excel은 그림 영역 위에 겹쳐 그린다 → overlay 0.
+    - 투명 보조 계열(폭포·간트·깔때기 바닥, 반원 도넛의 숨긴 반원)은 범례·라벨에서 뺀다.
+    - 막대·영역·원 안쪽 라벨은 칠한 색에 따라 흰색/짙은 회색(파일 변환기 inkOn과 같은 식).
+    - 꺾은선·분산형 계열의 smooth가 없으면 0(곡선으로 보이지 않게).
+    - 막대 위에 겹친 영역(콤보)·채워진 방사형·거품은 반투명.
+    - 항목 축 글자는 늘 아래·왼쪽(음수가 있어도 그림 안으로 들어가지 않게), 순서를 뒤집은 가로 막대의 값 축·뒤집은 값 축의 항목 축은 반대쪽 끝으로.
+    - 누적 꺾은선 라벨은 맨 위 계열만 위, 나머지는 아래(같은 항목에서 겹치지 않게)."""
+    # 숫자 형식
+    x = re.sub(r"<numFmt formatCode=\"([^\"]*)\"\s*/>", r'<numFmt formatCode="\1" sourceLinked="0"/>', x)
+    # 제목 겹침
+    def title(m):
+        b = m.group(1)
+        if "<overlay" in b:
+            return m.group(0)
+        k = min([i for i in (b.find("<spPr"), b.find("<txPr")) if i >= 0] or [len(b)])
+        return "<title>" + b[:k] + '<overlay val="0"/>' + b[k:] + "</title>"
+    x = re.sub(r"<title>(.*?)</title>", title, x, flags=re.S)
+
+    hidden_entries = []
+    pie_like = ("pieChart", "pie3DChart", "doughnutChart", "ofPieChart")
+
+    def group(m):
+        typ, body = m.group(1), m.group(2)
+        grouping = (re.search(r"<grouping val=\"(\w+)\"", body) or [None, ""])[1]
+        bardir = (re.search(r"<barDir val=\"(\w+)\"", body) or [None, ""])[1]
+        sers = re.findall(r"<ser>.*?</ser>", body, re.S)
+        overlay_bar = typ == "areaChart" and "<barChart>" in x
+        new = []
+        for k, ser in enumerate(sers):
+            s = ser[5:-6]
+            kind, col = _ser_fill(s)
+            sid = int(re.search(r"<idx val=\"(\d+)\"", s).group(1))
+            pts = _points(s)
+            if typ in pie_like:
+                for i, c in pts.items():
+                    if c is None:
+                        hidden_entries.append(i)
+            elif kind == "none":
+                hidden_entries.append(sid)
+            # 반투명
+            alpha = None
+            if overlay_bar:
+                alpha = 45000
+            elif typ == "radarChart" and 'radarStyle val="filled"' in body:
+                alpha = 50000
+            elif typ == "bubbleChart":
+                alpha = 75000
+            if alpha and kind == "rgb":
+                s = re.sub(r"(<spPr><a:solidFill>)<a:srgbClr val=\"(\w+)\"\s*/>", rf'\1<a:srgbClr val="\2"><a:alpha val="{alpha}"/></a:srgbClr>', s, 1)
+                if typ == "bubbleChart":
+                    s = re.sub(r"(</a:solidFill><a:ln[^>]*>)<a:solidFill><a:srgbClr val=\"\w+\"\s*/>", r'\1<a:solidFill><a:srgbClr val="FFFFFF"/>', s, 1)
+                kind = "alpha"
+            # 곡선 끄기
+            if typ in ("lineChart", "scatterChart") and "<smooth" not in s:
+                i = s.find("<extLst")
+                s = (s[:i] + '<smooth val="0"/>' + s[i:]) if i >= 0 else s + '<smooth val="0"/>'
+            # 누적 꺾은선 라벨 자리
+            if typ == "lineChart" and grouping in ("stacked", "percentStacked") and "<dLbls>" in s:
+                pos = "t" if (grouping == "stacked" and k == len(sers) - 1) else "b"
+                s = re.sub(r"<dLblPos val=\"\w+\"\s*/>", f'<dLblPos val="{pos}"/>', s)
+            # 라벨 글자색
+            dm = re.search(r"<dLbls>(.*?)</dLbls>", s, re.S)
+            if dm and "<txPr" not in dm.group(1) and "<delete val=\"1\"" not in dm.group(1):
+                d = dm.group(1)
+                pos = (re.search(r"<dLblPos val=\"(\w+)\"", d) or [None, None])[1]
+                if typ in ("pieChart", "pie3DChart", "ofPieChart") and pos is None:
+                    pos = "ctr"
+                    d = re.sub(r"(<showLegendKey)", r'<dLblPos val="ctr"/>\1', d, 1)
+                inside = (typ in ("areaChart", "doughnutChart") or typ in pie_like and pos in ("ctr", "inEnd", "bestFit")
+                          or typ == "barChart" and (pos in ("ctr", "inEnd", "inBase") or (pos is None and grouping in ("stacked", "percentStacked"))))
+                if inside:
+                    def ink(c):
+                        return "262626" if (c is None or kind == "alpha") else _ink(c)
+                    base = ink(col if kind in ("rgb", "alpha") else None)
+                    inks = {i: ("262626" if c is None else (ink(c) if c else base)) for i, c in pts.items()}
+                    head = ""
+                    nf = (re.search(r"<numFmt [^>]*/>", d) or [""])[0]
+                    show = "".join(re.findall(r"<show\w+ val=\"\d\"\s*/>", d))
+                    pz = f'<dLblPos val="{pos}"/>' if (pos and "dLblPos" in d) else ""
+                    for i in sorted(pts):
+                        if pts[i] is None:
+                            head += f'<dLbl><idx val="{i}"/><delete val="1"/></dLbl>'
+                        elif inks[i] != base:
+                            head += f'<dLbl><idx val="{i}"/>{nf}{_txpr(inks[i])}{pz}{show}</dLbl>'
+                    j = max([mm.end() for mm in re.finditer(r"<numFmt [^>]*/>|<spPr>.*?</spPr>", d, re.S)] or [0])
+                    d = head + d[:j] + _txpr(base) + d[j:]
+                    s = s[:dm.start(1)] + d + s[dm.end(1):]
+                elif d != dm.group(1):
+                    s = s[:dm.start(1)] + d + s[dm.end(1):]
+            new.append("<ser>" + s + "</ser>")
+        for old, nw in zip(sers, new):
+            body = body.replace(old, nw, 1)
+        return f"<{typ}>{body}</{typ}>"
+
+    x = re.sub(r"<(\w+Chart)>(.*?)</\1>", group, x, flags=re.S)
+
+    # 범례: 겹치지 않게 + 투명 계열 빼기
+    def legend(m):
+        b = m.group(1)
+        pm = re.match(r"<legendPos val=\"\w+\"\s*/>", b)
+        p = pm.group(0) if pm else ""
+        rest = b[len(p):]
+        ent = "".join(f'<legendEntry><idx val="{i}"/><delete val="1"/></legendEntry>' for i in sorted(set(hidden_entries))
+                      if f'<legendEntry><idx val="{i}"' not in rest)
+        if "<overlay" not in rest:
+            k = min([i for i in (rest.find("<spPr"), rest.find("<txPr")) if i >= 0] or [len(rest)])
+            rest = rest[:k] + '<overlay val="0"/>' + rest[k:]
+        return "<legend>" + p + ent + rest + "</legend>"
+    x = re.sub(r"<legend>(.*?)</legend>", legend, x, flags=re.S)
+
+    # 축 글자 자리
+    axes = {}
+    for m in re.finditer(r"<(catAx|valAx|dateAx|serAx)>(.*?)</\1>", x, re.S):
+        b = m.group(2)
+        axes[re.search(r"<axId val=\"(\d+)\"", b).group(1)] = (m.group(1), "maxMin" in b, 'delete val="1"' in b)
+    for typ, body in re.findall(r"<(barChart|lineChart|areaChart|stockChart)>(.*?)</\1>", x, re.S):
+        ids = re.findall(r"<axId val=\"(\d+)\"", body)
+        if len(ids) != 2 or ids[0] not in axes or ids[1] not in axes:
+            continue
+        cat, val = ids
+        if axes[cat][0] not in ("catAx", "dateAx") or axes[val][0] != "valAx":
+            continue
+        bardir = (re.search(r"<barDir val=\"(\w+)\"", body) or [None, ""])[1]
+        if axes[cat][1] and bardir == "bar" and not axes[val][2]:
+            x = _set_axis(x, val, _crosses_max)
+        if axes[val][1] and not axes[cat][2]:
+            x = _set_axis(x, cat, _crosses_max)
+        elif not axes[cat][2]:
+            x = _set_axis(x, cat, _tick_low("low"))
+    return x
 
 
 _ERRBAR_ORDER = ("errDir", "errBarType", "errValType", "noEndCap", "plus", "minus", "val", "spPr")
@@ -182,7 +417,7 @@ def fix_chart_xml(x: str) -> str:
         return f'<{ax}><axId val="{i}"{mid}<crossAx val="{partner[i]}"'
 
     x = re.sub(r"<(catAx|valAx|dateAx|serAx)><axId val=\"(\d+)\"(.*?)<crossAx val=\"(\d+)\"", cross, x, flags=re.S)
-    return x
+    return polish_chart_xml(x)
 
 
 _LINE_POS = {"t", "b", "l", "r", "ctr"}
@@ -221,24 +456,30 @@ def finish(data: bytes, wb) -> bytes:
                     show = ('<showLegendKey val="0"/><showVal val="0"/><showCatName val="0"/><showSerName val="0"/>'
                             '<showPercent val="0"/><showBubbleSize val="0"/>')
                     nofill = '<spPr><a:noFill/><a:ln><a:noFill/></a:ln></spPr>'
+                    col, sz = it.get("color", "404040"), it.get("size", 900)
+                    posx = f'<dLblPos val="{it["pos"]}"/>' if it.get("pos", "inBase") else ""
                     pts = ""
                     for i in range(len(it["texts"])):
                         g = "{%08X-2B3C-4D5E-8F90-%012X}" % (abs(hash(it["ref"])) & 0xFFFFFFFF, 1000 + i)
                         pts += (f'<dLbl><idx val="{i}"/><layout/><tx><rich><a:bodyPr wrap="none" lIns="0" rIns="0"/><a:lstStyle/><a:p>'
-                                f'<a:fld id="{g}" type="CELLRANGE"><a:rPr lang="ko-KR" sz="900" b="0"><a:solidFill><a:srgbClr val="404040"/></a:solidFill>{rp}</a:rPr>'
-                                f'<a:t>[CELLRANGE]</a:t></a:fld></a:p></rich></tx>{nofill}<dLblPos val="inBase"/>{show}'
+                                f'<a:fld id="{g}" type="CELLRANGE"><a:rPr lang="ko-KR" sz="{sz}" b="0"><a:solidFill><a:srgbClr val="{col}"/></a:solidFill>{rp}</a:rPr>'
+                                f'<a:t>[CELLRANGE]</a:t></a:fld></a:p></rich></tx>{nofill}{posx}{show}'
                                 f'<extLst><ext uri="{{CE6537A1-D6FC-4f65-9D91-7224C49458BB}}" xmlns:c15="{_C15}"><c15:dlblFieldTable/>'
                                 f'<c15:showDataLabelsRange val="1"/></ext></extLst></dLbl>')
-                    txpr = (f'<txPr><a:bodyPr wrap="none" lIns="0" rIns="0"/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="900" b="0"><a:solidFill>'
-                            f'<a:srgbClr val="404040"/></a:solidFill>{rp}</a:defRPr></a:pPr><a:endParaRPr lang="ko-KR"/></a:p></txPr>')
-                    dl = (f'<dLbls {A}>{pts}{nofill}{txpr}<dLblPos val="inBase"/>{show}'
+                    txpr = (f'<txPr><a:bodyPr wrap="none" lIns="0" rIns="0"/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="{sz}" b="0"><a:solidFill>'
+                            f'<a:srgbClr val="{col}"/></a:solidFill>{rp}</a:defRPr></a:pPr><a:endParaRPr lang="ko-KR"/></a:p></txPr>')
+                    dl = (f'<dLbls {A}>{pts}{nofill}{txpr}{posx}{show}'
                           f'<extLst><ext uri="{{CE6537A1-D6FC-4f65-9D91-7224C49458BB}}" xmlns:c15="{_C15}"><c15:showDataLabelsRange val="1"/>'
                           f'<c15:showLeaderLines val="0"/></ext></extLst></dLbls>')
                     cache = "".join(f'<pt idx="{i}"><v>{_esc(t)}</v></pt>' for i, t in enumerate(it["texts"]))
                     ext_ser = (f'<extLst><ext uri="{{02D57815-91ED-43cb-92C2-25804820EDAC}}" xmlns:c15="{_C15}">'
                                f'<c15:datalabelsRange><c15:f>{_esc(it["ref"])}</c15:f><c15:dlblRangeCache>'
                                f'<ptCount val="{len(it["texts"])}"/>{cache}</c15:dlblRangeCache></c15:datalabelsRange></ext></extLst>')
-                    ser = re.sub(r"<dLbls>.*?</dLbls>", lambda d: dl, ser, 1, flags=re.S)
+                    if "<dLbls>" in ser:
+                        ser = re.sub(r"<dLbls>.*?</dLbls>", lambda d: dl, ser, 1, flags=re.S)
+                    else:  # 라벨이 없던 계열(거품 이름·포레스트 항목 이름): 계열 순서상 dLbls 자리(spPr·표식·dPt 뒤, 값 앞)에 넣는다
+                        k = min([i for i in (ser.find("<trendline"), ser.find("<errBars"), ser.find("<cat>"), ser.find("<val>"), ser.find("<xVal>"), ser.find("<yVal>")) if i >= 0])
+                        ser = ser[:k] + dl + ser[k:]
                     return ser.replace("</ser>", ext_ser + "</ser>")
                 x2 = re.sub(r"<ser>.*?</ser>", rep, x, flags=re.S)
                 if x2 != x:
@@ -452,7 +693,22 @@ def _xy(ws, r, ct, head, rows, last):
                          zvalues=_ref(ws, 5, T0 + 1 + i0, 5, T0 + 1 + i1), title=name)
             _color(ser, PAL[k % 6])
             ch.series.append(ser)
+            ws.parent.__dict__.setdefault("_range_labels", []).append(
+                {"sheet": ws.title, "series": name, "ref": f"'{ws.title}'!$B${T0 + 1 + i0}:$B${T0 + 1 + i1}", "pos": "r", "color": "404040",
+                 "size": 800, "texts": [str(rows[i][1] or "") for i in range(i0, i1 + 1)]})
         ch.bubbleScale = 60
+        if ct == "quadrant":
+            # 사분면 기준선(그림과 같은 값: options.x_split·y_split, 없으면 중앙값)을 축 교차점으로 — 축 글자는 바깥쪽(low)에
+            import statistics
+            xs_ = [x[2] for x in rows if isinstance(x[2], (int, float))]
+            ys_ = [x[3] for x in rows if isinstance(x[3], (int, float))]
+            xm = o.get("x_split") if isinstance(o.get("x_split"), (int, float)) else statistics.median(xs_)
+            ym = o.get("y_split") if isinstance(o.get("y_split"), (int, float)) else statistics.median(ys_)
+            ch.x_axis.crossesAt, ch.y_axis.crossesAt = ym, xm
+            ch.x_axis.tickLblPos = ch.y_axis.tickLblPos = "low"
+        a_ = r.meta["args"]
+        ch.x_axis.title = a_.get("x_label")
+        ch.y_axis.title = a_.get("y_label")
         return _style_chart(ch)
     ch = ScatterChart()
     ch.style = 13
@@ -468,7 +724,10 @@ def _xy(ws, r, ct, head, rows, last):
         else:
             ser.graphicalProperties.line.noFill = True
         if ct == "scatter_trend":
-            ser.trendline = Trendline(trendlineType="linear", dispRSqr=True, dispEq=True)
+            from openpyxl.chart.data_source import NumFmt
+            from openpyxl.chart.trendline import TrendlineLabel
+            ser.trendline = Trendline(trendlineType="linear", dispRSqr=True, dispEq=True,
+                                      trendlineLbl=TrendlineLabel(numFmt=NumFmt(formatCode="#,##0.000", sourceLinked=False)))
         ch.series.append(ser)
     if o.get("diagonal"):
         xs = [x[2] for x in rows if isinstance(x[2], (int, float))] + [x[3] for x in rows if isinstance(x[3], (int, float))]
@@ -519,7 +778,7 @@ def _waterfall(ws, r, ct, head, rows, last):
             ser.graphicalProperties.line.noFill = True
         else:
             _color(ser, c)
-            _labels(ser, "inEnd")
+            _labels(ser, "inEnd", {"2A9478": "+#,##0", "D2601A": "-#,##0"}.get(c, "#,##0"))
         ch.series.append(ser)
     ch.set_categories(_ref(ws, 1, T0 + 1, 1, last))
     return _style_chart(ch)
@@ -603,8 +862,19 @@ def _range_bars(ws, r, ct, head, rows, last):
             ws.column_dimensions[get_column_letter(col + k)].width = wdt
         ch.y_axis.majorUnit = 30.4 if (max(ends) - min(starts)) <= 400 else 91.3
     elif ct == "football_field":
-        lo = min(x[1] for x in rows)
-        ch.y_axis.scaling.min = lo * 0.85
+        lo, hi = min(x[1] for x in rows), max(x[2] for x in rows)
+        ch.y_axis.scaling.min, ch.y_axis.majorUnit = _nice(lo - (hi - lo) * 0.15, hi)
+        ch.y_axis.number_format = "#,##0"
+        # 막대 왼쪽 끝에 하단, 오른쪽 끝 안쪽에 상단(2026-11-24 — 엑셀 풋볼필드에 범위 숫자가 없었다)
+        _labels(base, "inEnd")
+        cl = get_column_letter(3)
+        ws.parent.__dict__.setdefault("_range_labels", []).append(
+            {"sheet": ws.title, "series": ws.cell(T0, col + 1).value, "ref": f"'{ws.title}'!${cl}${T0 + 1}:${cl}${last}", "pos": "inEnd",
+             "color": "FFFFFF", "size": 1000, "texts": [f"{x[2]:,.0f}" for x in rows]})
+    elif ct == "funnel":
+        # 깔때기의 값 축은 투명 바닥 때문에 뜻이 없다(2026-11-24 — 엑셀에 0~1,200 축이 위에 찍혔다)
+        ch.y_axis.delete = True
+        ch.y_axis.majorGridlines = None
     ch.legend = None
     return _style_chart(ch)
 
@@ -626,7 +896,9 @@ def _stock(ws, r, ct, head, rows, last):
                                    downBars=ChartLines(spPr=GraphicalProperties(solidFill="2E5395")))
     ch.legend = None
     lo = min(x[3] for x in rows if x[3] is not None)
-    ch.y_axis.scaling.min = round(lo * 0.97, -2)
+    hi = max(x[2] for x in rows if x[2] is not None)
+    ch.y_axis.scaling.min, ch.y_axis.majorUnit = _nice(lo - (hi - lo) * 0.05, hi)
+    ch.y_axis.number_format = "#,##0"
     out = [_style_chart(ch)]
     if ct == "price_volume":
         vb = BarChart()
@@ -667,17 +939,16 @@ def _errorbars(ws, r, ct, head, rows, last):
             pt = DataPoint(idx=i)
             pt.graphicalProperties.solidFill = PAL[i % 6]
             ser.dPt.append(pt)
-        ch.set_categories(_ref(ws, 1, T0 + 1, 1, last))
     else:
         ch = LineChart()
         ser = Series(_ref(ws, 3, T0 + 1, 3, last), title="평균")
         ser.graphicalProperties.line.noFill = True
         ser.marker = Marker(symbol="circle", size=8)
         ser.marker.graphicalProperties.solidFill = "2E5395"
-        ch.set_categories(_ref(ws, 1, T0 + 1, 1, last))
     ser.errBars = ErrorBars(errDir="y", errBarType="both", errValType="cust", plus=plus, minus=minus, noEndCap=False)
     _labels(ser, "r" if ct == "errorbar" else "outEnd", "#,##0.0")
     ch.series.append(ser)
+    ch.set_categories(_ref(ws, 1, T0 + 1, 1, last))
     ch.legend = None
     return _style_chart(ch)
 
@@ -709,9 +980,41 @@ def _forest(ws, r, ct, head, rows, last):
                             plus=NumDataSource(numRef=NumRef(f=f"'{ws.title}'!${L(col + 3)}${T0 + 1}:${L(col + 3)}${e}")),
                             minus=NumDataSource(numRef=NumRef(f=f"'{ws.title}'!${L(col + 4)}${T0 + 1}:${L(col + 4)}${e}")))
     ch.series.append(ser)
-    ch.x_axis.scaling.logBase = 10
+    # 2026-11-24 — 엑셀 포레스트에 항목 이름이 없고(세로축 숨김) 로그 10 축 최대 1에서 신뢰구간이 잘렸다.
+    # 축은 2의 거듭제곱(0.25·0.5·1·2), 왼쪽에 한 칸 더 두어 그 자리에 항목 이름을 쓰고(투명 계열 + 셀 값 라벨), 1에 세로 기준선.
+    import math
+    lows = [it.get("lower") or it["estimate"] for it in items]
+    highs = [it.get("upper") or it["estimate"] for it in items]
+    xmin = 2 ** (math.floor(math.log2(min(lows + [1]))) - 2)
+    xmax = 2 ** math.ceil(math.log2(max(highs + [1]) * 1.05))
+    ws.cell(T0, col + 5, "이름 자리")
+    ws.cell(T0, col + 6, "기준선 x")
+    ws.cell(T0, col + 7, "기준선 y")
+    for i in range(len(items)):
+        ws.cell(T0 + 1 + i, col + 5, xmin)
+    for i, (xv, yv) in enumerate(((1, 0.5), (1, len(items) + 0.5))):
+        ws.cell(T0 + 1 + i, col + 6, xv)
+        ws.cell(T0 + 1 + i, col + 7, yv)
+    ref_ = Series(_ref(ws, col + 7, T0 + 1, col + 7, T0 + 2), _ref(ws, col + 6, T0 + 1, col + 6, T0 + 2), title="기준(1)")
+    ref_.marker = Marker(symbol="none")
+    ref_.graphicalProperties.line.solidFill = "7F7F7F"
+    ref_.graphicalProperties.line.dashStyle = "dash"
+    ch.series.append(ref_)
+    nm = Series(_ref(ws, col + 2, T0 + 1, col + 2, e), _ref(ws, col + 5, T0 + 1, col + 5, e), title="항목 이름")
+    nm.marker = Marker(symbol="none")
+    nm.graphicalProperties.line.noFill = True
+    ch.series.append(nm)
+    L_ = get_column_letter(col)
+    ws.parent.__dict__.setdefault("_range_labels", []).append(
+        {"sheet": ws.title, "series": "항목 이름", "ref": f"'{ws.title}'!${L_}${T0 + 1}:${L_}${e}", "pos": "r", "color": "262626",
+         "size": 900, "texts": [str(it.get("label") or "") for it in items]})
+    ch.x_axis.scaling.logBase = 2
+    ch.x_axis.scaling.min, ch.x_axis.scaling.max = xmin, xmax
+    ch.x_axis.number_format = "0.0#"
     ch.x_axis.title = "HR (로그 척도)"
+    ch.y_axis.scaling.min, ch.y_axis.scaling.max = 0.5, len(items) + 0.5
     ch.y_axis.delete = True
+    ch.y_axis.majorGridlines = None
     ch.legend = None
     return _style_chart(ch)
 
@@ -924,8 +1227,10 @@ def _violin_x(ws, r, ct, head, rows, last):
         sr.graphicalProperties.line.solidFill = PAL[k % 6]
         sr.graphicalProperties.line.width = 19050
         ch.series.append(sr)
-    ch.x_axis.scaling.min, ch.x_axis.scaling.max = 0.4, len(gs) + 0.6
-    ch.x_axis.title = " · ".join(f"{i + 1}={g.get('name')}" for i, g in enumerate(gs))
+    ch.x_axis.scaling.min, ch.x_axis.scaling.max = 0.5, len(gs) + 0.5
+    ch.x_axis.majorUnit = 1
+    ch.x_axis.tickLblPos = "none"  # 가로 위치는 군 번호일 뿐이라 숫자를 쓰지 않는다(군 이름은 범례)
+    ch.x_axis.majorGridlines = None
     return _style_chart(ch), c0 + 4
 
 
@@ -961,6 +1266,11 @@ def build(r, wb=None, sheet: str = "차트"):
     if ct == "choropleth":
         head = head[:2]
     last = _write_table(ws, head, rows) if rows else T0
+    dfmt = None
+    if rows and (ct in NATIVE_CATEGORY or ct in ("candlestick", "hlc", "price_volume")):
+        dfmt = _date_cells(ws, 1, T0 + 1, last)
+    elif rows and ct in ("time_series", "control_chart"):
+        dfmt = _date_cells(ws, 3, T0 + 1, last)
     charts, note, special_col = None, None, None
     try:
         if not rows:
@@ -1008,6 +1318,9 @@ def build(r, wb=None, sheet: str = "차트"):
     anchor_col = get_column_letter(special_col) if special_col else get_column_letter(max(len(head), 1) + 2 + (5 if ct in ("waterfall", "funnel", "football_field", "gantt", "errorbar", "errorbar_bar", "forest", "control_chart") else 0))
     if charts:
         for k, ch in enumerate(charts if isinstance(charts, list) else [charts]):
+            if dfmt and ch.tagname in ("lineChart", "areaChart", "barChart", "stockChart"):
+                ch.x_axis.number_format = dfmt
+                ch.x_axis.auto = False  # 글자 축: 주말·빈 날을 띄우지 않는다(일별 주가)
             _show_axes(ch)
             ws.add_chart(ch, f"{anchor_col}{T0 + k * 19}")
     if not charts or ct in HEAT:
