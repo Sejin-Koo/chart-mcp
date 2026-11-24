@@ -44,9 +44,17 @@ def _phase(v, phases, where):
 
 def _date_axis(ax, d0, d1):
     span = (d1 - d0).days
-    loc = mdates.MonthLocator(interval=1 if span <= 400 else (3 if span <= 1100 else 6))
-    ax.xaxis.set_major_locator(loc)
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%y.%m" if span > 300 else "%-m월"))
+    # 눈금 수를 그림 폭에 맞춘다(2026-11-24 — 7년 남짓한 간트에 6개월 눈금 17개가 붙어 "22.0923.03…"으로 겹침).
+    # 보이는 범위(xlim — 오른쪽 기간 글 자리 포함)로 재서 눈금이 10개를 넘지 않는 가장 촘촘한 간격을 고르고, 1년 이상 간격이면 연도만 쓴다
+    a, b = ax.get_xlim()
+    months = max(1.0, (b - a) / 30.44)
+    step = next((m for m in (1, 2, 3, 6, 12, 24, 36, 60) if months / m <= 10), 120)
+    if step >= 12:
+        ax.xaxis.set_major_locator(mdates.YearLocator(step // 12))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
+    else:
+        ax.xaxis.set_major_locator(mdates.MonthLocator(interval=step))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%y.%m" if span > 300 else "%-m월"))
 
 
 def _gantt(args, o):
