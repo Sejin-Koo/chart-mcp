@@ -130,7 +130,7 @@ _ERRBAR_ORDER = ("errDir", "errBarType", "errValType", "noEndCap", "plus", "minu
 
 
 def fix_chart_xml(x: str) -> str:
-    """openpyxl 3.1이 Excel 규격과 다르게 쓰는 차트 XML을 바로잡는다(1.2.7~1.2.8).
+    """openpyxl 3.1이 Excel 규격과 다르게 쓰는 차트 XML을 바로잡는다(1.2.7~1.2.9).
     - 오차막대: openpyxl은 <minus>를 <plus>보다 먼저 쓴다(규격은 plus → minus). Excel은 '내용에 문제가 있습니다 — 복구'를 띄운다.
     - 분산형: openpyxl은 scatterStyle을 비워 두면 쓰지 않는데 규격상 필수 요소다. 맨 앞에 lineMarker를 넣는다(선·표식은 계열 서식이 정함)."""
     import re
@@ -164,6 +164,24 @@ def fix_chart_xml(x: str) -> str:
         return f"<{typ}>{body}</{typ}>"
 
     x = re.sub(r"<(\w+Chart)>(.*?)</\1>", per_chart, x, flags=re.S)
+
+    # 축이 없는 축과 교차하도록 적혀 있으면 같은 차트 묶음의 다른 축으로 바로잡는다(1.2.9).
+    defined = set(re.findall(r"<(?:catAx|valAx|dateAx|serAx)><axId val=\"(\d+)\"", x))
+    partner = {}
+    for body in re.findall(r"<\w+Chart>(.*?)</\w+Chart>", x, flags=re.S):
+        ids = re.findall(r"<axId val=\"(\d+)\"", body)
+        for i in ids:
+            others = [j for j in ids if j != i and j in defined]
+            if others:
+                partner.setdefault(i, others[0])
+
+    def cross(m):
+        ax, i, mid, c = m.group(1), m.group(2), m.group(3), m.group(4)
+        if c in defined or i not in partner:
+            return m.group(0)
+        return f'<{ax}><axId val="{i}"{mid}<crossAx val="{partner[i]}"'
+
+    x = re.sub(r"<(catAx|valAx|dateAx|serAx)><axId val=\"(\d+)\"(.*?)<crossAx val=\"(\d+)\"", cross, x, flags=re.S)
     return x
 
 
@@ -869,6 +887,8 @@ def _mekko_x(ws, r, ct, head, rows, last):
         sr.graphicalProperties.line.solidFill = "FFFFFF"
         ch.series.append(sr)
     ch.x_axis = DateAxis(crossAx=100)
+    ch.x_axis.axPos = "b"
+    ch.y_axis.crossAx = 500  # 기본값 10(없는 축)을 가리키면 Excel이 복구 창을 띄운다
     ch.x_axis.number_format = "0"
     ch.x_axis.majorTimeUnit = "days"
     ch.x_axis.delete = True
