@@ -122,28 +122,97 @@ def _gantt(args, o):
                   table=(["작업", "그룹", "시작", "종료", "진척"], [[r["name"], r["g"], r["s"].isoformat(), r["e"].isoformat(), r["p"]] for r in rows]))
 
 
+def _tl_lines(lab: str, n: int = 11) -> list[str]:
+    """긴 사건 이름을 n자 안팎으로 줄 바꿈(띄어쓰기 자리 우선, 최대 3줄)."""
+    out, cur = [], ""
+    for w in lab.split():
+        if not cur:
+            cur = w
+        elif len(cur) + 1 + len(w) <= n:
+            cur += " " + w
+        else:
+            out.append(cur)
+            cur = w
+    if cur:
+        out.append(cur)
+    lines = []
+    for ln in out:
+        while len(ln) > int(n * 1.4):
+            lines.append(ln[:n])
+            ln = ln[n:]
+        lines.append(ln)
+    if len(lines) > 3:
+        lines = lines[:2] + [lines[2][: n - 1] + "…"]
+    return lines or [""]
+
+
 def _timeline(args, o):
     title, sub = args.get("title"), args.get("subtitle")
     evs = as_list(args.get("events"), "events")
     need(evs, "events=[{date, label}]가 필요합니다", example=[{"date": "2026-01-15", "label": "IND 승인"}])
     items = sorted([(_d(as_dict(e, f"events[{i}]").get("date"), f"events[{i}].date"), str(as_dict(e, "e").get("label", ""))) for i, e in enumerate(evs)])
-    d0, d1 = items[0][0], items[-1][0]
+    # 사건이 몰린 구간에서 이름표가 겹치지 않게(2026-11-24 — 카카오 연혁 14건이 2025.12~2026.08에 몰려 글자가 서로 덮임):
+    # 이름표 폭을 실제 글꼴로 재서 위·아래와 단(최대 4단)을 고르고, 단이 늘면 그림 높이를 늘린다. 긴 이름은 11자 안팎으로 줄 바꿈
     with figure(2.4, o) as fig:
-        top = top_for(fig, title, sub, o, False)
-        ax = fig.add_axes([0.04, 0.1, 0.92, top - 0.12])
-        ax.axis("off")
+        w_in = fig.get_size_inches()[0]
+        aw = 0.92 * w_in
         x = [mdates.date2num(d) for d, _ in items]
         pad = max(20, (x[-1] - x[0]) * 0.06)
+        lo, hi = x[0] - pad * 1.6, x[-1] + pad * 1.6
+        per_in = (hi - lo) / aw
+        rend = fig.canvas.get_renderer()
+        texts = []
+        for d, lab in items:
+            body = [d.strftime("%Y.%m")] + _tl_lines(lab)
+            t = fig.text(0, 0, "\n".join(body), fontsize=st.LABEL_SIZE, fontweight="bold", linespacing=1.3)
+            bb = t.get_window_extent(rend)
+            t.remove()
+            texts.append((body, bb.width / fig.dpi + 0.08, bb.height / fig.dpi))
+        step = max(h for _, _, h in texts) + 0.12
+        placed = {}  # (side, level) -> [(x0, x1)]
+        slots, prev = [], -1
+        for k, xx in enumerate(x):
+            wl = texts[k][1]
+            xi = (xx - lo) / per_in
+            a, b = xi - wl / 2, xi + wl / 2
+            s0 = -prev
+            cands = [(s, lv) for lv in range(4) for s in (s0, -s0)]
+            best = None
+            for c in cands:
+                if all(b <= p0 or a >= p1 for p0, p1 in placed.get(c, [])):
+                    best = c
+                    break
+            if best is None:  # 4단 모두 막히면 겹침이 가장 적은 자리
+                best = min(cands, key=lambda c: sum(max(0, min(b, p1) - max(a, p0)) for p0, p1 in placed.get(c, [])))
+            placed.setdefault(best, []).append((a, b))
+            slots.append(best)
+            prev = best[0]
+        n_up = 1 + max([lv for s, lv in slots if s > 0], default=-1)
+        n_dn = 1 + max([lv for s, lv in slots if s < 0], default=-1)
+        base = 0.2
+        up_in = base + n_up * step if n_up else 0.15
+        dn_in = base + n_dn * step if n_dn else 0.15
+        plot_h = up_in + dn_in + 0.1
+        fig.set_size_inches(w_in, max(2.4, plot_h + 0.35))
+        top = top_for(fig, title, sub, o, False)
+        h_in = fig.get_size_inches()[1]
+        avail = (top - 0.04) * h_in
+        bot = 0.04 + max(0.0, (avail - plot_h) / 2) / h_in
+        ax = fig.add_axes([0.04, bot, 0.92, plot_h / h_in])
+        ax.axis("off")
+        ax.set_xlim(lo, hi)
+        ax.set_ylim(-dn_in - 0.05, up_in + 0.05)
         ax.plot([x[0] - pad, x[-1] + pad], [0, 0], color=st.NAVY, lw=2.2, zorder=1)
         for k, ((d, lab), xx) in enumerate(zip(items, x)):
-            up = 1 if k % 2 == 0 else -1
-            ax.plot([xx, xx], [0, 0.55 * up], color=st.GRAY, lw=1, zorder=1)
+            side, lv = slots[k]
+            y = side * (base + lv * step)
+            ax.plot([xx, xx], [0, y], color=st.GRAY, lw=1, zorder=1)
             ax.scatter([xx], [0], s=70, color=st.ORANGE if k == len(items) - 1 else st.NAVY, zorder=3, edgecolor="white", lw=1.2)
-            ax.text(xx, 0.6 * up, f"{d.strftime('%Y.%m')}\n{lab}" if up > 0 else f"{lab}\n{d.strftime('%Y.%m')}", ha="center",
-                    va="bottom" if up > 0 else "top", fontsize=st.LABEL_SIZE, color=st.INK, linespacing=1.3,
-                    fontweight="bold")
-        ax.set_xlim(x[0] - pad * 1.6, x[-1] + pad * 1.6)
-        ax.set_ylim(-1.4, 1.4)
+            body = texts[k][0]
+            txt = "\n".join(body) if side > 0 else "\n".join(body[1:] + body[:1])
+            ax.text(xx, y, txt, ha="center", va="bottom" if side > 0 else "top", fontsize=st.LABEL_SIZE, color=st.INK,
+                    linespacing=1.3, fontweight="bold", zorder=4,
+                    bbox=dict(boxstyle="square,pad=0.15", facecolor="white", edgecolor="none"))
         put_title(fig, title, sub, o)
         png = to_png(fig)
     return Result(png, table=(["날짜", "내용"], [[d.isoformat(), lab] for d, lab in items]))
