@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 import os
 import sys
@@ -19,9 +20,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from chartkit import api as chart_api  # noqa: E402
 from chartkit.core import setup_fonts  # noqa: E402
+from chartkit.excel import build as excel_build  # noqa: E402
 from chartkit.errors import ChartInputError  # noqa: E402
 
-SERVER = {"name": "chart-mcp", "version": "1.0.0"}
+SERVER = {"name": "chart-mcp", "version": "1.1.0"}
 SUPPORTED = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05", "2024-10-07"]
 GATE_KEYS = [k.strip() for k in os.environ.get("MCP_GATE_KEYS", "").split(",") if k.strip()]
 GATE_MODE = os.environ.get("MCP_GATE_MODE", "observe")
@@ -57,6 +59,15 @@ TOOLS = [
             "output": {"type": "string", "enum": ["image", "base64", "xlsx"], "description": "돌려줄 형식(기본 image)"},
             "include_xlsx": {"type": ["boolean", "string"], "description": "엑셀 원본도 함께(base64)"},
         }},
+        "annotations": {"readOnlyHint": True},
+    },
+    {
+        "name": "draw_charts_xlsx",
+        "description": ("여러 차트의 엑셀 원본을 한 통합문서로 — 차트마다 시트 하나(시트 이름 '그림N', N은 fig_no 또는 순번). "
+                        "보고서의 그림자료 엑셀을 만들 때 쓴다. 그리지 못한 차트는 사유를 warnings에 담고 건너뛴다."),
+        "inputSchema": {"type": "object", "required": ["charts"], "properties": {
+            "charts": {"type": "array", "items": {"type": "object"}, "description": "draw_chart와 같은 항목(type·data·title·unit·options)에 fig_no(그림 번호)를 더한 목록, 40개까지"},
+            "title": {"type": "string", "description": "통합문서 제목(파일 속성)"}}},
         "annotations": {"readOnlyHint": True},
     },
     {
@@ -110,6 +121,41 @@ def call_tool(name: str, a: dict) -> dict:
         if xlsx is not None:
             content.append(_text({"xlsx_base64": base64.b64encode(xlsx).decode()}))
         return {"content": content}
+    if name == "draw_charts_xlsx":
+        charts = a.get("charts")
+        if isinstance(charts, str):
+            charts = json.loads(charts)
+        if not isinstance(charts, list) or not charts:
+            return {"content": [_text("charts가 비어 있습니다")], "isError": True}
+        from openpyxl import Workbook
+        wb = Workbook()
+        wb.remove(wb.active)
+        warns, made, used = [], [], set()
+        for i, c in enumerate(charts[:40]):
+            if not isinstance(c, dict):
+                continue
+            no = c.get("fig_no") or (i + 1)
+            sheet = f"그림{no}"
+            while sheet in used:
+                sheet += "_"
+            try:
+                ttl = c.get("title") or ""
+                r = chart_api.draw(c.get("type"), c.get("data"), title=(f"[그림 {no}] {ttl}" if ttl else f"[그림 {no}]"),
+                                   subtitle=c.get("subtitle"), unit=c.get("unit"), options=c.get("options"))
+                excel_build(r, wb=wb, sheet=sheet)
+                used.add(sheet)
+                made.append({"fig_no": no, "sheet": sheet, "type": r.meta["code"] or r.meta["chart_type"]})
+            except Exception as e:  # noqa: BLE001
+                warns.append(f"그림 {no}: {e}")
+        if not made:
+            return {"content": [_text({"ok": False, "warnings": warns})], "isError": True}
+        if a.get("title"):
+            wb.properties.title = str(a["title"])[:200]
+        bio = io.BytesIO()
+        wb.save(bio)
+        x = bio.getvalue()
+        return {"content": [_text({"ok": True, "sheets": made, "warnings": warns, "xlsx_bytes": len(x),
+                                   "xlsx_base64": base64.b64encode(x).decode()})]}
     return {"content": [_text(f"알 수 없는 도구: {name}")], "isError": True}
 
 
