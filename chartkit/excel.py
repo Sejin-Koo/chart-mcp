@@ -283,7 +283,8 @@ def polish_chart_xml(x: str) -> str:
                 kind = "alpha"
             # 곡선 끄기
             if typ in ("lineChart", "scatterChart") and "<smooth" not in s:
-                i = s.find("<extLst")
+                # 계열 끝의 extLst(셀 값 라벨 범위) 앞 — 라벨(dLbl) 안의 extLst 앞에 넣으면 규격 위반(1.3.2)
+                i = s.rfind("<extLst>") if s.endswith("</extLst>") else -1
                 s = (s[:i] + '<smooth val="0"/>' + s[i:]) if i >= 0 else s + '<smooth val="0"/>'
             # 누적 꺾은선 라벨 자리
             if typ == "lineChart" and grouping in ("stacked", "percentStacked") and "<dLbls>" in s:
