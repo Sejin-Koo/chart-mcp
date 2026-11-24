@@ -126,12 +126,34 @@ def _esc(t):
     return str(t).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+_ERRBAR_ORDER = ("errDir", "errBarType", "errValType", "noEndCap", "plus", "minus", "val", "spPr")
+
+
+def fix_chart_xml(x: str) -> str:
+    """openpyxl 3.1이 Excel 규격과 다르게 쓰는 차트 XML을 바로잡는다(1.2.7).
+    - 오차막대: openpyxl은 <minus>를 <plus>보다 먼저 쓴다(규격은 plus → minus). Excel은 '내용에 문제가 있습니다 — 복구'를 띄운다.
+    - 분산형: openpyxl은 scatterStyle을 비워 두면 쓰지 않는데 규격상 필수 요소다. 맨 앞에 lineMarker를 넣는다(선·표식은 계열 서식이 정함)."""
+    import re
+
+    def errbars(m):
+        body = m.group(1)
+        items = re.findall(r"(<(\w+)\b[^>]*?/>|<(\w+)\b[^>]*>.*?</\3>)", body, flags=re.S)
+        if "".join(i[0] for i in items) != body:  # 예상 밖 모양이면 손대지 않는다
+            return m.group(0)
+        key = {n: i for i, n in enumerate(_ERRBAR_ORDER)}
+        items.sort(key=lambda t: key.get(t[1] or t[2], 99))
+        return "<errBars>" + "".join(i[0] for i in items) + "</errBars>"
+
+    x = re.sub(r"<errBars>(.*?)</errBars>", errbars, x, flags=re.S)
+    x = re.sub(r"<scatterChart>(?!\s*<scatterStyle)", '<scatterChart><scatterStyle val="lineMarker" />', x)
+    return x
+
+
 def finish(data: bytes, wb) -> bytes:
-    """저장한 통합문서에 openpyxl이 못 쓰는 '셀 값 라벨'(c15:datalabelsRange)을 넣는다.
+    """저장한 통합문서를 마무리한다: 차트 XML 규격 보정(fix_chart_xml)과,
+    openpyxl이 못 쓰는 '셀 값 라벨'(c15:datalabelsRange) 넣기.
     wb._range_labels: [{sheet, series(계열 이름), ref(라벨 셀 범위), texts}]"""
     items = getattr(wb, "_range_labels", None) or []
-    if not items:
-        return data
     import re
     import zipfile
     zin = zipfile.ZipFile(io.BytesIO(data))
@@ -177,6 +199,9 @@ def finish(data: bytes, wb) -> bytes:
                 x2 = re.sub(r"<ser>.*?</ser>", rep, x, flags=re.S)
                 if x2 != x:
                     x, changed = x2, True
+            x2 = fix_chart_xml(x)
+            if x2 != x:
+                x, changed = x2, True
             if changed:
                 b = x.encode("utf-8")
         zout.writestr(info, b)
