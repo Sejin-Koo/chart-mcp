@@ -87,7 +87,8 @@ def list_types(code: str | None = None, tag: str | None = None) -> list[dict] | 
     for e in catalog():
         if tag and tag not in e["tags"] and tag not in e["name"]:
             continue
-        out.append({k: e[k] for k in ("code", "chart_type", "name", "use", "tags")})
+        # 쓰임(when)·유의점(avoid — 이럴 때는 다른 차트): 차트를 고를 때 보는 판단 근거(2026-11-24, '보고서 차트 75종 활용 가이드'에서 옮김)
+        out.append({k: e[k] for k in ("code", "chart_type", "name", "use", "when", "avoid", "tags") if k in e})
     return out
 
 

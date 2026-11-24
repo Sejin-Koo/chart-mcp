@@ -26,7 +26,7 @@ from chartkit.core import setup_fonts  # noqa: E402
 from chartkit.excel import build as excel_build, finish as excel_finish  # noqa: E402
 from chartkit.errors import ChartInputError  # noqa: E402
 
-SERVER = {"name": "chart-mcp", "version": "1.2.9"}
+SERVER = {"name": "chart-mcp", "version": "1.3.0"}
 SUPPORTED = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05", "2024-10-07"]
 GATE_KEYS = [k.strip() for k in os.environ.get("MCP_GATE_KEYS", "").split(",") if k.strip()]
 GATE_MODE = os.environ.get("MCP_GATE_MODE", "observe")
@@ -40,7 +40,7 @@ INSTRUCTIONS = (
 TOOLS = [
     {
         "name": "list_chart_types",
-        "description": "그릴 수 있는 차트 75종 목록(코드·chart_type·이름·용도·분류). code를 주면 그 차트의 예시 입력(draw_chart에 그대로 넣을 수 있는 type·data·options)을 돌려준다. tag로 거르기: 비교·추이·구성·분포·상관·흐름·계층·성과·재무·일정·지리·유통·임상·오믹스·3D.",
+        "description": "그릴 수 있는 차트 75종 목록(코드·chart_type·이름·용도·쓰임 when·유의점 avoid·분류). 차트를 고를 때는 when(언제 쓰는지)과 avoid(이럴 때는 다른 차트 — 대안이 적혀 있음)를 보고, 75종 전체 대신 tag로 걸러 보는 편이 빠르다. code를 주면 그 차트의 예시 입력(draw_chart에 그대로 넣을 수 있는 type·data·options)을 돌려준다. tag로 거르기: 비교·추이·구성·분포·상관·흐름·계층·성과·재무·일정·지리·유통·임상·오믹스·3D.",
         "inputSchema": {"type": "object", "properties": {
             "code": {"type": "string", "description": "차트 코드(예: R-05, G-03) 또는 chart_type(예: km)"},
             "tag": {"type": "string", "description": "분류 이름으로 거르기"}}},
