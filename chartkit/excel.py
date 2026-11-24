@@ -130,7 +130,7 @@ _ERRBAR_ORDER = ("errDir", "errBarType", "errValType", "noEndCap", "plus", "minu
 
 
 def fix_chart_xml(x: str) -> str:
-    """openpyxl 3.1이 Excel 규격과 다르게 쓰는 차트 XML을 바로잡는다(1.2.7).
+    """openpyxl 3.1이 Excel 규격과 다르게 쓰는 차트 XML을 바로잡는다(1.2.7~1.2.8).
     - 오차막대: openpyxl은 <minus>를 <plus>보다 먼저 쓴다(규격은 plus → minus). Excel은 '내용에 문제가 있습니다 — 복구'를 띄운다.
     - 분산형: openpyxl은 scatterStyle을 비워 두면 쓰지 않는데 규격상 필수 요소다. 맨 앞에 lineMarker를 넣는다(선·표식은 계열 서식이 정함)."""
     import re
@@ -146,7 +146,33 @@ def fix_chart_xml(x: str) -> str:
 
     x = re.sub(r"<errBars>(.*?)</errBars>", errbars, x, flags=re.S)
     x = re.sub(r"<scatterChart>(?!\s*<scatterStyle)", '<scatterChart><scatterStyle val="lineMarker" />', x)
+
+    def per_chart(m):
+        # 스키마로는 통과하지만 Excel이 차트 종류별로 허용하지 않는 값(1.2.8):
+        # - 데이터 레이블 위치(dLblPos): 영역·도넛·방사형·표면형은 지정 불가, 누적 막대는 outEnd 불가 등
+        # - 오차막대 방향(errDir): 분산형·거품형에만 쓴다(막대·꺾은선은 값 축 방향이 정해져 있음)
+        typ, body = m.group(1), m.group(2)
+        if typ == "barChart":
+            stacked = re.search(r'<grouping val="(stacked|percentStacked)"', body)
+            ok = {"ctr", "inBase", "inEnd"} if stacked else {"ctr", "inBase", "inEnd", "outEnd"}
+        else:
+            ok = _DLBL_POS.get(typ)
+        if ok is not None:
+            body = re.sub(r'<dLblPos val="(\w+)"\s*/>', lambda d: d.group(0) if d.group(1) in ok else "", body)
+        if typ not in ("scatterChart", "bubbleChart"):
+            body = re.sub(r'<errDir val="\w+"\s*/>', "", body)
+        return f"<{typ}>{body}</{typ}>"
+
+    x = re.sub(r"<(\w+Chart)>(.*?)</\1>", per_chart, x, flags=re.S)
     return x
+
+
+_LINE_POS = {"t", "b", "l", "r", "ctr"}
+_DLBL_POS = {"lineChart": _LINE_POS, "line3DChart": _LINE_POS, "scatterChart": _LINE_POS, "bubbleChart": _LINE_POS,
+             "stockChart": _LINE_POS, "pieChart": {"bestFit", "ctr", "inEnd", "outEnd"},
+             "pie3DChart": {"bestFit", "ctr", "inEnd", "outEnd"}, "ofPieChart": {"bestFit", "ctr", "inEnd", "outEnd"},
+             "doughnutChart": set(), "areaChart": set(), "area3DChart": set(), "radarChart": set(),
+             "surfaceChart": set(), "surface3DChart": set()}
 
 
 def finish(data: bytes, wb) -> bytes:
