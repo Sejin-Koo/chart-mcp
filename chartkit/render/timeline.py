@@ -251,7 +251,11 @@ def _pipeline(args, o):
                 ax.axvline(j, zorder=0, **st.GRID_KW)
         for i, r in enumerate(rows):
             c = gc[r["g"]]
-            end = r["k"] + (r["p"] if r["p"] is not None else 0.85)
+            # 진척은 단계 안 비율(0~1). 1보다 크면 %로 보고(40 → 0.4), 0~1로 자른다(1.4.0 — 큰 값이면 막대가 그림 밖 수만 픽셀로 뻗었다)
+            p_ = r["p"]
+            if p_ is not None and p_ > 1:
+                p_ = p_ / 100
+            end = r["k"] + (max(0.05, min(1.0, p_)) if p_ is not None else 0.85)
             ax.add_patch(FancyBboxPatch((0.05, i - 0.26), end - 0.05, 0.52, boxstyle="round,pad=0,rounding_size=0.18", facecolor=c, edgecolor="none", zorder=2))
             ax.text(-0.08, i, f"{r['name']}", ha="right", va="bottom", fontsize=st.FONT_SIZE, fontweight="bold", color=st.INK, transform=ax.transData, clip_on=False)
             ax.text(-0.08, i, r["ind"], ha="right", va="top", fontsize=7.6, color=st.MUTED, clip_on=False)
