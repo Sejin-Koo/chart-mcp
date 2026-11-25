@@ -334,6 +334,11 @@ def run(only=None, save=None, extra_specs=None):
         CUR["tag"] = tag
         try:
             res = api.draw(ex["type"], ex.get("data"), title=ex.get("title"), unit=ex.get("unit"), options=ex.get("options"))
+            from PIL import Image
+            import io as _io
+            W_, H_ = Image.open(_io.BytesIO(res.png)).size
+            if W_ > 3000 or H_ > 4000:
+                FOUND.append({"tag": tag, "issues": [{"kind": "size", "a": f"{W_}x{H_}"}]})
             if save:
                 Path(save).mkdir(parents=True, exist_ok=True)
                 (Path(save) / f"{tag.replace(':', '_')}.png").write_bytes(res.png)

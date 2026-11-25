@@ -577,6 +577,27 @@ def fix_corner(fig, ax) -> None:
         fig.canvas.draw()
 
 
+def keep_inside(fig) -> None:
+    """데이터 좌표 숫자 라벨이 축 위·아래 밖으로 나가면(세운 숫자·음수 막대 아래 숫자) 값 축 범위를 그만큼 늘린다."""
+    r = fig.canvas.get_renderer()
+    for ax in fig.axes:
+        if _skip_axes(ax) or ax.name == "polar" or ax.yaxis_inverted():
+            continue
+        labs = [t for t in ax.texts if _visible_text(t) and _is_num(t) and t.get_transform() == ax.transData]
+        if not labs:
+            continue
+        for _ in range(3):
+            bbs = [t.get_window_extent(r) for t in labs]
+            up = max(b.y1 for b in bbs) - ax.bbox.y1
+            dn = ax.bbox.y0 - min(b.y0 for b in bbs)
+            if up <= 1 and dn <= 1:
+                break
+            y0, y1 = ax.get_ylim()
+            k = (y1 - y0) / max(ax.bbox.height - max(up, 0) - max(dn, 0), 10)
+            ax.set_ylim(y0 - (dn + 3) * k if dn > 1 else y0, y1 + (up + 3) * k if up > 1 else y1)
+            fig.canvas.draw()
+
+
 def run(fig) -> None:
     if not ENABLED.get():
         return
@@ -592,6 +613,8 @@ def run(fig) -> None:
         place_annotations(fig)
         fig.canvas.draw()
         fix_value_labels(fig)
+        fig.canvas.draw()
+        keep_inside(fig)
     except Exception as e:  # noqa: BLE001 — 정리 실패로 그림을 못 그리면 안 된다
         _note(f"글자 겹침 정리를 건너뛰었습니다({type(e).__name__})")
 
@@ -755,3 +778,17 @@ def fit_width(fig, ax, items, *, what: str = "숫자", min_size: float = LABEL_M
     for t, _ in items:
         t.set_visible(False)
     _note(f"그룹이 많아 {what} 라벨을 넣을 자리가 없어 생략했습니다(값은 엑셀 원본 표)")
+
+
+def safe_bbox(fig):
+    """저장 영역: 보통은 'tight'. 그림 밖 먼 곳에 글자·도형이 있어 잘라낸 영역이 그림의 3배(폭)·4배(높이)를 넘으면
+    그림 크기 그대로 저장한다(1.4.0 — 진척 100을 1로 안 바꾼 입력에서 그림 폭이 7만 픽셀이 되었다)."""
+    try:
+        tb = fig.get_tightbbox(fig.canvas.get_renderer())
+        w, h = fig.get_size_inches()
+        if tb.width > w * 3 or tb.height > h * 4:
+            _note("그림 범위를 크게 벗어난 값이나 글자가 있어 그림 크기를 고정했습니다 — 입력 값의 단위(비율 0~1·%)를 확인하세요")
+            return None
+    except Exception:  # noqa: BLE001
+        pass
+    return "tight"
