@@ -62,7 +62,10 @@ def palette(n: int, *, wide: bool = False) -> list[str]:
     if n <= len(base):
         return base[:n]
     extra = ["#8C8C8C", "#A6A6A6", "#595959", "#BFBFBF"]
-    return (base + extra * 4)[:n]
+    out = list(base)
+    while len(out) < n:  # 몇 개든 n개를 돌려준다(1.4.0 — 23개 이상이면 IndexError로 그리기 실패)
+        out.append(extra[(len(out) - len(base)) % len(extra)])
+    return out[:n]
 
 
 def seq(n: int) -> list[str]:

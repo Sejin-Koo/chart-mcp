@@ -162,8 +162,33 @@ def legend_top(fig, items: list[tuple[str, str, str]], title, sub, o, *, ncol: i
     y = 1 - 0.04 / h
     if o.get("show_title") and (title or sub):
         y -= (0.3 + (0.2 if (title and sub) else 0)) / h
-    fig.legend(handles=hs, loc="upper center", ncol=ncol or min(len(hs), 6), frameon=False, bbox_to_anchor=(0.5, y),
-               handlelength=1.2, handletextpad=0.4, columnspacing=1.2)
+    # 1.4.0: 범례가 그림 폭을 넘으면 한 줄 칸 수를 줄이고, 두 줄 이상이면 그만큼 그림 칸(축)을 아래로 내린다
+    #        (이전: 6칸 고정 — 항목이 많거나 이름이 길면 범례가 그림 밖으로 나가거나 축 위를 덮었다)
+    nc = ncol or min(len(hs), 6)
+    leg = None
+    W = fig.bbox.width * 0.98
+    while True:
+        if leg is not None:
+            leg.remove()
+        leg = fig.legend(handles=hs, loc="upper center", ncol=nc, frameon=False, bbox_to_anchor=(0.5, y),
+                         handlelength=1.2, handletextpad=0.4, columnspacing=1.2)
+        if nc <= 1:
+            break
+        fig.canvas.draw()
+        if leg.get_window_extent().width <= W:
+            break
+        nc -= 1
+    fig.canvas.draw()
+    lb = fig.transFigure.inverted().transform((0, leg.get_window_extent().y0))[1] - 0.04 / h
+    axes = [a for a in fig.axes if a.get_visible()]
+    if axes:
+        top_ = max(a.get_position().y1 for a in axes)
+        bot_ = min(a.get_position().y0 for a in axes)
+        if lb < top_ and top_ > bot_ and lb > bot_ + 0.25:
+            k = (lb - bot_) / (top_ - bot_)
+            for a in axes:
+                p_ = a.get_position()
+                a.set_position([p_.x0, bot_ + (p_.y0 - bot_) * k, p_.width, p_.height * k])
 
 
 def style_axes(ax, *, grid: str = "y", left_spine: bool = False) -> None:
@@ -188,6 +213,8 @@ def axis_unit(ax, unit: str | None, which: str = "y") -> None:
 
 
 def to_png(fig, dpi: int | None = None) -> bytes:
+    from . import declutter
+    declutter.run(fig)  # 글자 겹침 정리(1.4.0)
     b = io.BytesIO()
     fig.savefig(b, format="png", dpi=dpi or st.DPI, bbox_inches="tight", pad_inches=0.06)
     return b.getvalue()

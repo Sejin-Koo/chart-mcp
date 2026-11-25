@@ -63,11 +63,15 @@ def draw(ct: str, args: dict, o: dict) -> Result:
                 rng = np.random.default_rng(0)
                 for i, g in enumerate(gs):
                     ax.scatter(i + 1 + rng.uniform(-0.12, 0.12, len(g["values"])), g["values"], s=8, color=st.INK2, alpha=0.5, zorder=3)
+            side = []
             for i, g in enumerate(gs):
                 q1, med, q3 = np.percentile(g["values"], [25, 50, 75])
-                ax.text(i + 1.3, med, st.fmt(med), va="center", ha="left", fontsize=st.LABEL_SIZE, fontweight="bold", color=cols[i])
+                side.append((ax.text(i + 1.3, med, st.fmt(med), va="center", ha="left", fontsize=st.LABEL_SIZE, fontweight="bold", color=cols[i]),
+                             i + 1.75))
                 rows.append([g["name"], len(g["values"]), float(np.min(g["values"])), float(q1), float(med), float(q3), float(np.max(g["values"])), float(np.mean(g["values"]))])
             ax.set_xticks(range(1, n + 1), [g["name"] for g in gs])
+            from .. import declutter
+            declutter.fit_width(fig, ax, side, what="중앙값")  # 1.4.0 — 그룹이 많으면 옆 상자를 덮었다
             notes.append("상자: 사분위 범위(25~75%), 흰 선: 중앙값, 수염: 1.5×IQR 안의 최솟값·최댓값, 주황 점: 이상값")
             head = ["군", "n", "최솟값", "Q1", "중앙값", "Q3", "최댓값", "평균"]
         elif ct == "histogram":
@@ -117,17 +121,23 @@ def draw(ct: str, args: dict, o: dict) -> Result:
             if ct == "errorbar_bar":
                 ax.bar(x, means, color=cols, width=0.55, zorder=2)
                 ax.errorbar(x, means, yerr=yerr, fmt="none", ecolor=st.INK, elinewidth=1.3, capsize=6, zorder=3)
-                for i, m in enumerate(means):
-                    ax.text(i + 0.3, m, st.fmt(m), ha="left", va="bottom", fontsize=st.LABEL_SIZE, fontweight="bold", color=cols[i])
+                side = [(ax.text(i + 0.3, m, st.fmt(m), ha="left", va="bottom", fontsize=st.LABEL_SIZE, fontweight="bold", color=cols[i]), i + 0.72)
+                        for i, m in enumerate(means)]
                 ax.set_ylim(0, max(hi) * 1.15)
+                from .. import declutter
+                declutter.fit_width(fig, ax, side, what="평균")
             else:
+                side = []
                 for i in range(n):
                     ax.errorbar([i], [means[i]], yerr=[[yerr[0][i]], [yerr[1][i]]], fmt="o", color=cols[i], ecolor=cols[i], elinewidth=1.8,
                                 capsize=7, markersize=7, zorder=3)
-                    ax.text(i + 0.12, means[i], st.fmt(means[i]), ha="left", va="center", fontsize=st.LABEL_SIZE, fontweight="bold", color=cols[i])
+                    side.append((ax.text(i + 0.12, means[i], st.fmt(means[i]), ha="left", va="center", fontsize=st.LABEL_SIZE, fontweight="bold",
+                                         color=cols[i]), i + 0.85))
                 span = max(hi) - min(lo)
                 ax.set_ylim(min(lo) - span * 0.25, max(hi) + span * 0.2)
                 ax.set_xlim(-0.5, n - 0.3)
+                from .. import declutter
+                declutter.fit_width(fig, ax, side, what="평균")
             ax.set_xticks(x, [g["name"] for g in gs])
             if all(g.get("values") is None for g in gs) and not o.get("error"):
                 lab = "입력한 오차(±error 또는 lower~upper)"

@@ -110,15 +110,22 @@ def _sankey(args, o):
             verts = [(x0, y0), (xm, y0), (xm, y1), (x1, y1), (x1, y1 + hs), (xm, y1 + hs), (xm, y0 + hs), (x0, y0 + hs), (x0, y0)]
             codes = [Path.MOVETO, Path.CURVE4, Path.CURVE4, Path.CURVE4, Path.LINETO, Path.CURVE4, Path.CURVE4, Path.CURVE4, Path.CLOSEPOLY]
             ax.add_patch(PathPatch(Path(verts, codes), facecolor=cols_by[s], alpha=0.28, edgecolor="none"))
+        col_texts = {}
         for n in names:
             k, y, h = pos[n]
             x = xcoord(k)
             ax.add_patch(Rectangle((x - nw / 2, y), nw, h, facecolor=cols_by[n], edgecolor="none"))
             right = k < nlev - 1
-            ax.text(x + (nw / 2 + 0.01) * (1 if right else -1), y + h / 2, f"{n}\n{st.fmt(size[n])}{unit or ''}", ha="left" if right else "right",
-                    va="center", fontsize=st.LABEL_SIZE, color=st.INK, linespacing=1.2)
+            t = ax.text(x + (nw / 2 + 0.01) * (1 if right else -1), y + h / 2, f"{n}\n{st.fmt(size[n])}{unit or ''}", ha="left" if right else "right",
+                        va="center", fontsize=st.LABEL_SIZE, color=st.INK, linespacing=1.2)
+            col_texts.setdefault(k, []).append((size[n], t, x + (nw / 2) * (1 if right else -1)))
         ax.set_xlim(0, 1)
         ax.set_ylim(1.02, -0.02)
+        # 같은 열의 이름표가 겹치면 위아래로 벌림(1.4.0 — 작은 노드 이름이 서로 겹쳤다). 큰 노드부터 남긴다.
+        from .. import declutter
+        for k, items in col_texts.items():
+            items.sort(key=lambda z: -z[0])
+            declutter.stack_vertical(fig, ax, [t for _, t, _ in items], leader_x=items[0][2])
         put_title(fig, title, sub, o)
         png = to_png(fig)
     return Result(png, ["산키: 띠의 굵기가 흐름량입니다"], table=(["출발", "도착", "값"], [list(l) for l in links]))
