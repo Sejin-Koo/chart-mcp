@@ -243,6 +243,13 @@ def draw_line_family(ct: str, args: dict, o: dict) -> Result:
                 zero_based = stacked or any(k in ("bar", "area") for k in kinds) or (allv and min(allv) < 0.5 * max(allv)) or (allv and min(allv) <= 0)
                 lo_auto = min(0, cur[0]) if zero_based else min(allv) - (max(allv) - min(allv)) * 0.25
                 hi_auto = max(cur[1], vmax * 1.15) if zero_based else max(allv) + (max(allv) - min(allv)) * 0.3
+                # 1.4.0: 지정한 y_min·y_max 밖에 값이 있으면 숫자 라벨이 그림 밖 먼 곳에 찍혀 그림이 수만 픽셀로 커지다 메모리 오류가 났다
+                if allv and lo_ is not None and min(allv) < float(lo_):
+                    notes.append(f"y_min({st.fmt(lo_)})보다 작은 값이 있어 축 아래 끝을 값에 맞췄습니다")
+                    lo_ = None
+                if allv and hi_ is not None and max(allv) > float(hi_):
+                    notes.append(f"y_max({st.fmt(hi_)})보다 큰 값이 있어 축 위 끝을 값에 맞췄습니다")
+                    hi_ = None
                 ax.set_ylim(lo_ if lo_ is not None else lo_auto, hi_ if hi_ is not None else hi_auto)
             axis_unit(ax, unit)
             if ax2 is not None:
@@ -271,10 +278,38 @@ def draw_line_family(ct: str, args: dict, o: dict) -> Result:
         if legend:
             legend_top(fig, leg, title, sub, o)
         put_title(fig, title, sub, o)
+        if ax2 is not None and not horizontal:
+            _lift_secondary(fig, ax, ax2, ser, right, kinds)
         png = to_png(fig)
         w, hh = fig.get_size_inches()
     head, rows = table_from_series(cats, ser + ([band_lo, band_hi] if band_lo else []))
     return Result(png, notes, table=(head, rows), w=int(w * st.DPI), h=int(hh * st.DPI))
+
+
+def _lift_secondary(fig, ax, ax2, ser, right, kinds):
+    """혼합(막대 + 보조축 선): 선의 가장 낮은 점이 막대·막대 숫자 띠보다 위에 오도록 보조축 범위를 잡는다(1.4.0).
+    이전에는 보조축을 값 범위로만 잡아 선의 값 폭이 넓으면(2%~27%) 낮은 점이 막대 숫자를 가로질렀다(계정 chart-spec.js 2026-11-25.2와 같은 원칙).
+    값이 모두 0 이상이면 보조축의 음수 눈금은 쓰지 않는다."""
+    from matplotlib.ticker import FuncFormatter
+
+    from .. import declutter
+    rvals = [v for s_, r in zip(ser, right) if r for v in s_["values"] if v is not None]
+    if not rvals or not any(k == "bar" for k, r in zip(kinds, right) if not r) or any(k == "area" for k, r in zip(kinds, right) if r):
+        return
+    declutter.run(fig)  # 막대 숫자를 먼저 세우거나 줄여 실제 높이를 잰다
+    rr = fig.canvas.get_renderer()
+    tops = [t.get_window_extent(rr).y1 for t in ax.texts if t.get_visible() and t.get_text().strip()]
+    tops += [p.get_window_extent(rr).y1 for p in ax.patches]
+    if not tops:
+        return
+    f = min(0.8, (max(tops) - ax.bbox.y0) / ax.bbox.height + 0.06)
+    mn, mx = min(rvals), max(rvals)
+    span = (mx - mn) or abs(mx) or 1
+    hi = mx + span * 0.18
+    lo = (mn - f * hi) / (1 - f)
+    ax2.set_ylim(lo, hi)
+    if mn >= 0:
+        ax2.yaxis.set_major_formatter(FuncFormatter(lambda v, _p=None: "" if v < -1e-9 else st.fmt(v)))
 
 
 def draw_stream(args: dict, o: dict) -> Result:
@@ -642,7 +677,8 @@ def draw_radar(ct: str, args: dict, o: dict) -> Result:
         for lv in (0.25, 0.5, 0.75, 1.0):
             pts = [(lv * math.cos(a), lv * math.sin(a)) for a in ang]
             ax.plot([p[0] for p in pts + pts[:1]], [p[1] for p in pts + pts[:1]], color=st.GRID, lw=0.8)
-            ax.text(0.02, lv, st.fmt(vmax * lv), fontsize=6.5, color=st.MUTED, va="bottom")
+            ax.text(0.02, lv, st.fmt(vmax * lv), fontsize=6.5, color=st.MUTED, va="bottom", zorder=6,
+                    bbox=dict(boxstyle="square,pad=0.05", facecolor="white", edgecolor="none", alpha=0.75))  # 1.4.0: 계열 선이 눈금 숫자를 가로질렀다
         for a, c in zip(ang, cats):
             ax.plot([0, math.cos(a)], [0, math.sin(a)], color=st.GRID, lw=0.8)
             ax.text(1.14 * math.cos(a), 1.12 * math.sin(a), c, ha="center", va="center", fontsize=st.FONT_SIZE, color=st.INK2)

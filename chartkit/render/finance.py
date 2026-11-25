@@ -244,8 +244,15 @@ def _kpi(args, o):
             better = k.get("higher_is_better", True) not in (False, "false")
             good = d is None or (d >= 0) == better
             ax.text(0.07, 0.83, str(k.get("name", "")), transform=ax.transAxes, fontsize=8.5, color=st.INK2, va="center")
-            ax.text(0.07, 0.52, f"{st.fmt(v)}", transform=ax.transAxes, fontsize=17, fontweight="bold", color=st.INK, va="center")
-            ax.text(0.07 + 0.075 * len(st.fmt(v)) + 0.03, 0.47, str(k.get("unit") or ""), transform=ax.transAxes, fontsize=8, color=st.MUTED, va="center")
+            vt = ax.text(0.07, 0.52, f"{st.fmt(v)}", transform=ax.transAxes, fontsize=17, fontweight="bold", color=st.INK, va="center")
+            # 1.4.0: 단위 자리를 글자 수로 어림해 값과 단위 사이가 들쭉날쭉했고, 큰 수는 카드 밖으로 나갔다 → 값 글자 폭을 재서 바로 옆에 붙이고 카드에 맞춰 줄임
+            ut = ax.annotate(str(k.get("unit") or ""), xy=(1, 0), xycoords=vt, xytext=(3, 1), textcoords="offset points", fontsize=8,
+                             color=st.MUTED, va="bottom", ha="left")
+            fig.canvas.draw()
+            right = ax.bbox.x0 + ax.bbox.width * 0.95
+            while vt.get_fontsize() > 10 and max(vt.get_window_extent().x1, ut.get_window_extent().x1 if ut.get_text() else 0) > right:
+                vt.set_fontsize(vt.get_fontsize() - 1)
+                fig.canvas.draw()
             if d is not None:
                 ax.text(0.07, 0.18, f"{'▲' if d >= 0 else '▼'} {st.fmt(abs(d), 0 if float(d).is_integer() else 1)}{k.get('delta_unit') or ''}", transform=ax.transAxes, fontsize=8.5,
                         fontweight="bold", color=st.GOOD if good else st.BAD, va="center")

@@ -7,6 +7,7 @@ from matplotlib import patches
 from matplotlib.colors import LinearSegmentedColormap
 
 from . import _st as st
+from ... import style as _s
 from ...errors import as_dict, as_list, as_number, need
 from . import _core as core
 from ._core import figure, num_fmt, title as put_title, to_bytes, top_margin
@@ -58,13 +59,17 @@ def _strip(data, title, sub, o, w, h):
     rng = np.random.default_rng(0)
     with figure(w, h) as fig:
         ax = fig.add_axes([0.08, 0.1, 0.9, top_margin(title, sub) - 0.13])
+        side = []
         for i, (_, v) in enumerate(gs):
             ax.scatter(i + rng.uniform(-0.18, 0.18, len(v)), v, s=22, color=C[i % 8], alpha=0.7, lw=0)
             m = v.mean()
             ax.hlines(m, i - 0.28, i + 0.28, color=st.INK, lw=2)
             if o.get("show_mean_label", True):
-                ax.text(i + 0.31, m, f"{m:.3g}", va="center", fontsize=9.5, color=st.INK)
+                # 1.4.0: '{:.3g}'는 1만 이상에서 1.23e+04로 나왔다 → 천 단위 쉼표
+                side.append((ax.text(i + 0.31, m, _s.fmt(m) if abs(m) >= 1000 else f"{m:.3g}", va="center", fontsize=9.5, color=st.INK), i + 0.8))
         ax.set_xticks(range(len(gs)), [f"{n}\n(n={len(v)})" for n, v in gs])
+        from ... import declutter
+        declutter.fit_width(fig, ax, side, what="평균")
         ax.set_ylabel(o.get("y_label", ""))
         ax.grid(axis="x", visible=False)
         put_title(fig, ax, title, sub)
@@ -194,7 +199,14 @@ def _contour(data, title, sub, o, w, h):
         ax = fig.add_axes([0.09, 0.11, 0.8, top_margin(title, sub) - 0.14])
         cf = ax.contourf(x, y, z, levels=int(o.get("levels", 12)), cmap=SEQ_CMAP)
         cs = ax.contour(x, y, z, levels=cf.levels, colors="white", linewidths=0.6)
-        ax.clabel(cs, fmt=lambda v: f"{v:.3g}", fontsize=8, colors=st.INK)
+        labs = ax.clabel(cs, fmt=lambda v: _s.fmt(v) if abs(v) >= 1000 else f"{v:.3g}", fontsize=8, colors=st.INK)
+        # 1.4.0: 테두리에 걸린 등고선 숫자는 반쯤 잘려 보였다 → 축 안에 다 들어가지 않으면 뺀다
+        fig.canvas.draw()
+        r_ = fig.canvas.get_renderer()
+        for t in labs:
+            b = t.get_window_extent(r_)
+            if b.x0 < ax.bbox.x0 + 1 or b.x1 > ax.bbox.x1 - 1 or b.y0 < ax.bbox.y0 + 1 or b.y1 > ax.bbox.y1 - 1:
+                t.set_visible(False)
         if o.get("mark_max", True):
             iy, ix = np.unravel_index(np.nanargmax(z), z.shape)
             ax.plot(x[ix], y[iy], "*", color=st.UP, ms=14, mec="white")

@@ -48,7 +48,7 @@ def _labels(ax, pts, color, o, small=False):
     if o.get("show_labels") is False:
         return
     shown = [p for p in pts if p.get("label")]
-    if len(shown) > 25 and not o.get("show_labels"):
+    if len(shown) > 60 and not o.get("show_labels"):  # 1.4.0: 25 → 60(겹치는 이름은 declutter가 옮기거나 생략)
         return
     for p in shown:
         ax.annotate(str(p["label"]), (p["x"], p["y"]), xytext=(4, 4), textcoords="offset points", fontsize=7.2 if small else 7.6, color=st.INK2)
@@ -57,6 +57,7 @@ def _labels(ax, pts, color, o, small=False):
 def draw(ct: str, args: dict, o: dict) -> Result:
     date_x = ct in ("time_series", "control_chart")
     ser = _points(args, date_x)
+    ref_texts = []
     title, sub = args.get("title"), args.get("subtitle")
     cols = [st.color(s.get("color"), c) for s, c in zip(ser, st.palette(len(ser)))]
     notes, computed = [], {}
@@ -162,7 +163,8 @@ def draw(ct: str, args: dict, o: dict) -> Result:
                                 (tgt if tgt is not None else (mu if auto else None), "기준" if tgt is not None else "평균", st.INK2)):
                 if v is not None:
                     ax.axhline(v, color=col, lw=1, ls="--", zorder=2)
-                    ax.text(1.0, v, f" {lab} {st.fmt(v, 2)}", transform=ax.get_yaxis_transform(), ha="left", va="center", fontsize=7.5, color=col)
+                    ref_texts.append(ax.text(1.0, v, f" {lab} {st.fmt(v, 2)}", transform=ax.get_yaxis_transform(), ha="left", va="center",
+                                             fontsize=7.5, color=col))
             leg.append(("관리 한계 밖", st.BAD, "marker"))
             notes.append(f"관리 한계 {'평균±3σ (자동 계산)' if auto else '입력값'}: 하한 {st.fmt(lcl, 2)}, 상한 {st.fmt(ucl, 2)}. 이탈 {n_out}건(빨간 점)")
             computed.update(ucl=ucl, lcl=lcl, mean=round(mu, 4), sd=round(sd, 4), out=n_out)
@@ -190,6 +192,9 @@ def draw(ct: str, args: dict, o: dict) -> Result:
         if legend:
             legend_top(fig, leg, title, sub, o)
         put_title(fig, title, sub, o)
+        if len(ref_texts) > 1:
+            from .. import declutter
+            declutter.stack_vertical(fig, ax, ref_texts)  # 1.4.0: 관리 한계가 가까우면 오른쪽 이름표가 겹쳤다
         png = to_png(fig)
     rows = []
     for s in ser:

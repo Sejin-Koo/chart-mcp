@@ -56,6 +56,8 @@ def top_margin(text, sub):
 
 
 def to_bytes(fig, formats=("png",)):
+    from ... import declutter
+    declutter.run(fig)  # 글자 겹침 정리(1.4.0)
     b = io.BytesIO()
     fig.savefig(b, format="png", dpi=OUT_PX / fig.get_size_inches()[0], bbox_inches="tight", pad_inches=0.08)
     return {"png": b.getvalue()}

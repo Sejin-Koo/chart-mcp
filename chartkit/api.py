@@ -68,7 +68,17 @@ def draw(type_: str, data: Any = None, *, title: str | None = None, subtitle: st
         if v is not None:
             args[k] = v
     mod = importlib.import_module(f".render.{group}", __package__)
-    r = mod.draw(ct, args, o)
+    from . import declutter
+    tok_n, tok_e = declutter.NOTES.set([]), declutter.ENABLED.set(o.get("declutter", True) is not False)
+    try:
+        r = mod.draw(ct, args, o)
+        dnotes = declutter.NOTES.get() or []
+    finally:
+        declutter.NOTES.reset(tok_n)
+        declutter.ENABLED.reset(tok_e)
+    for n_ in dnotes:
+        if n_ not in r.notes:
+            r.notes.append(n_)
     r.meta = {"code": entry["code"] if entry else None, "chart_type": ct, "name": entry["name"] if entry else ct, "group": group,
               "title": title, "unit": unit, "args": args, "options": o}
     fs = setup_fonts()

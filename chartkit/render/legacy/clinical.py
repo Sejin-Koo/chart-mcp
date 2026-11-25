@@ -202,6 +202,40 @@ def _km(data, title, sub, o, w, h):
     return res, warns, meta
 
 
+def _fit_forest_labels(fig, ax, labs, ns):
+    """하위군 이름이 길어 N 열 숫자와 겹치면: 줄이기(8.5pt) → 공백에서 두 줄 → 8pt(1.4.0)."""
+    fig.canvas.draw()
+    r = fig.canvas.get_renderer()
+    right = (min(t.get_window_extent(r).x0 for t in ns) if ns else ax.bbox.x0) - 6
+
+    def over():
+        return [t for t in labs if t.get_window_extent(r).x1 > right]
+
+    if not over():
+        return
+    for t in labs:
+        t.set_fontsize(min(t.get_fontsize(), 9.5))
+    for t in over():
+        t.set_fontsize(8.5)
+    wrapped = False
+    for t in over():
+        txt = t.get_text()
+        lead = len(txt) - len(txt.lstrip(" "))
+        body = txt.strip()
+        sp = [k for k, ch in enumerate(body) if ch == " "]
+        if sp:
+            k = min(sp, key=lambda k: abs(k - len(body) / 2))
+            t.set_text(" " * lead + body[:k] + "\n" + " " * lead + body[k + 1:])
+            t.set_linespacing(1.0)
+            wrapped = True
+    if wrapped:  # 두 줄 이름이 위아래 줄과 붙지 않게 그림 높이를 늘린다
+        w_, h_ = fig.get_size_inches()
+        fig.set_size_inches(w_, h_ * 1.45)
+        fig.canvas.draw()
+    for t in over():
+        t.set_fontsize(8)
+
+
 def _forest(data, title, sub, o, w, h):
     rows = as_list(data.get("rows"), "rows")
     ex = [{"label": "전체", "estimate": 0.72, "lower": 0.58, "upper": 0.89, "overall": True}, {"label": "65세 미만", "estimate": 0.68, "lower": 0.5, "upper": 0.92, "n": 210}]
@@ -228,11 +262,12 @@ def _forest(data, title, sub, o, w, h):
         ax.set_ylim(n - 0.5, -0.9)
         ax.set_yticks([])
         trans = ax.get_yaxis_transform()
+        lab_texts, n_texts = [], []
         for i, it in enumerate(items):
-            ax.text(-0.75, i, ("   " * it["indent"]) + it["label"], transform=trans, ha="left", va="center", fontsize=10.5,
-                    fontweight="bold" if (it["header"] or it["overall"]) else "normal", color=st.INK, clip_on=False)
+            lab_texts.append(ax.text(-0.75, i, ("   " * it["indent"]) + it["label"], transform=trans, ha="left", va="center", fontsize=10.5,
+                                     fontweight="bold" if (it["header"] or it["overall"]) else "normal", color=st.INK, clip_on=False))
             if it["n"] is not None:
-                ax.text(-0.08, i, str(it["n"]), transform=trans, ha="right", va="center", fontsize=10, color=st.INK2, clip_on=False)
+                n_texts.append(ax.text(-0.08, i, str(it["n"]), transform=trans, ha="right", va="center", fontsize=10, color=st.INK2, clip_on=False))
             if it["est"] is None:
                 continue
             if it["overall"]:
@@ -257,6 +292,7 @@ def _forest(data, title, sub, o, w, h):
             ax.set_xticks([c for c in cand if lo_ / 1.15 <= c <= hi_ * 1.15])
         ax.grid(axis="y", visible=False)
         ax.spines["left"].set_visible(False)
+        _fit_forest_labels(fig, ax, lab_texts, n_texts)
         fav = as_list(o.get("favours"), "options.favours")
         if len(fav) == 2:
             ax.text(0.0, -0.09, f"← {fav[0]}", transform=ax.transAxes, ha="left", va="top", fontsize=9.5, color=st.MUTED)
