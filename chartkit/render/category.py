@@ -674,14 +674,25 @@ def draw_radar(ct: str, args: dict, o: dict) -> Result:
         ax = fig.add_axes([0.1, 0.03, 0.8, top - 0.05])
         ax.set_aspect("equal")
         ax.axis("off")
+        # 1.4.2: 눈금 숫자는 계열 값이 가장 낮은 칸(이웃한 두 축 사이) 가운데 방향에 둔다 — 세로축 위에 두면 꼭짓점 점·선과 겹쳤다
+        def _hi(i):
+            return max(((s_["values"][i] or 0) for s_ in ser), default=0)
+        kbest = min(range(n), key=lambda k: (max(_hi(k), _hi((k + 1) % n)), k))
+        mid = (ang[kbest] + ang[(kbest + 1) % n]) / 2 if kbest + 1 < n else ang[kbest] - math.pi / n
         for lv in (0.25, 0.5, 0.75, 1.0):
             pts = [(lv * math.cos(a), lv * math.sin(a)) for a in ang]
             ax.plot([p[0] for p in pts + pts[:1]], [p[1] for p in pts + pts[:1]], color=st.GRID, lw=0.8)
-            ax.text(0.02, lv, st.fmt(vmax * lv), fontsize=6.5, color=st.MUTED, va="bottom", zorder=6,
-                    bbox=dict(boxstyle="square,pad=0.05", facecolor="white", edgecolor="none", alpha=0.75))  # 1.4.0: 계열 선이 눈금 숫자를 가로질렀다
+            rr_ = lv * math.cos(math.pi / n)  # 다각형 변 위
+            ax.text(rr_ * math.cos(mid), rr_ * math.sin(mid), st.fmt(vmax * lv), fontsize=6.5, color=st.MUTED, ha="center", va="center", zorder=6,
+                    bbox=dict(boxstyle="square,pad=0.05", facecolor="white", edgecolor="none", alpha=0.75))
+        names = []
         for a, c in zip(ang, cats):
             ax.plot([0, math.cos(a)], [0, math.sin(a)], color=st.GRID, lw=0.8)
-            ax.text(1.14 * math.cos(a), 1.12 * math.sin(a), c, ha="center", va="center", fontsize=st.FONT_SIZE, color=st.INK2)
+            # 1.4.2: 이름을 꼭짓점 바깥쪽에 붙인다(오른쪽은 왼쪽 정렬, 왼쪽은 오른쪽 정렬, 위·아래는 가운데) — 가운데 정렬이면 좌우 이름이 다각형 안으로 들어와 선과 겹쳤다
+            ca, sa = math.cos(a), math.sin(a)
+            ha = "left" if ca > 0.2 else ("right" if ca < -0.2 else "center")
+            va = "bottom" if sa > 0.2 else ("top" if sa < -0.2 else "center")
+            names.append(ax.text(1.07 * ca, 1.07 * sa, str(c), ha=ha, va=va, fontsize=st.FONT_SIZE, color=st.INK2, linespacing=1.1))
         for s, c in zip(ser, cols):
             pts = [((v or 0) / vmax * math.cos(a), (v or 0) / vmax * math.sin(a)) for v, a in zip(s["values"], ang)]
             xs, ys = [p[0] for p in pts + pts[:1]], [p[1] for p in pts + pts[:1]]
@@ -692,9 +703,53 @@ def draw_radar(ct: str, args: dict, o: dict) -> Result:
         ax.set_ylim(-1.25, 1.25)
         if len(ser) > 1:
             legend_top(fig, [(s["name"], c, "line") for s, c in zip(ser, cols)], title, sub, o)
+        _fit_radar_names(fig, ax, names)
         put_title(fig, title, sub, o)
         png = to_png(fig)
     return Result(png, table=table_from_series(cats, ser, "항목"))
+
+
+def _fit_radar_names(fig, ax, names):
+    """꼭짓점 이름: 이웃 이름과 겹치거나 그림 폭을 넘으면 긴 이름을 두 줄로 → 7pt까지 줄임 → 하나 걸러 생략(1.4.2)."""
+    from .. import declutter
+    if len(names) < 2:
+        return
+    r = fig.canvas.get_renderer()
+
+    def bad():
+        fig.canvas.draw()
+        Rs = [declutter.rect(t, r) for t in names if t.get_visible()]
+        n = len(Rs)
+        col = any(declutter.overlap(Rs[i], Rs[(i + 1) % n]) > 0 for i in range(n) if Rs[i] and Rs[(i + 1) % n])
+        W = fig.bbox.width
+        out = any(t.get_visible() and (t.get_window_extent(r).x0 < 2 or t.get_window_extent(r).x1 > W - 2) for t in names)
+        return col or out
+
+    if not bad():
+        return
+    for t in names:  # 두 줄(공백이 있으면 공백에서, 없으면 6자 넘을 때 가운데)
+        txt = t.get_text()
+        if "\n" in txt:
+            continue
+        if " " in txt:
+            k = min((abs(i - len(txt) / 2), i) for i, ch in enumerate(txt) if ch == " ")[1]
+            t.set_text(txt[:k] + "\n" + txt[k + 1:])
+        elif len(txt) > 6:
+            k = (len(txt) + 1) // 2
+            t.set_text(txt[:k] + "\n" + txt[k:])
+    if not bad():
+        declutter._note("꼭짓점 이름이 겹쳐 긴 이름을 두 줄로 썼습니다")
+        return
+    while bad() and names[0].get_fontsize() > 7.05:
+        for t in names:
+            t.set_fontsize(max(7, t.get_fontsize() - 0.5))
+    if not bad():
+        declutter._note("꼭짓점 이름이 겹쳐 글자를 줄였습니다")
+        return
+    for i, t in enumerate(names):
+        if i % 2:
+            t.set_visible(False)
+    declutter._note(f"꼭짓점이 많아 이름을 하나 걸러 표시했습니다(전체 {len(names)}개는 엑셀 원본 표)")
 
 
 def draw(ct: str, args: dict, o: dict) -> Result:
