@@ -26,7 +26,7 @@ from chartkit.core import setup_fonts  # noqa: E402
 from chartkit.excel import build as excel_build, finish as excel_finish  # noqa: E402
 from chartkit.errors import ChartInputError  # noqa: E402
 
-SERVER = {"name": "chart-mcp", "version": "1.6.0"}
+SERVER = {"name": "chart-mcp", "version": "1.6.1"}
 SUPPORTED = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05", "2024-10-07"]
 GATE_KEYS = [k.strip() for k in os.environ.get("MCP_GATE_KEYS", "").split(",") if k.strip()]
 GATE_MODE = os.environ.get("MCP_GATE_MODE", "observe")
@@ -34,8 +34,19 @@ GATE_MODE = os.environ.get("MCP_GATE_MODE", "observe")
 INSTRUCTIONS = (
     "보고서용 차트 75종을 그리는 서버입니다(맑은 고딕, 계정 보고서 색 규칙). "
     "list_chart_types로 코드(예: R-05)와 예시 입력을 확인한 뒤 draw_chart에 type·data를 넣어 부르세요. "
-    "막대·꺾은선·원 같은 기본 그래프 28종과 도식(흐름도·조직도·SWOT·로드맵 등)은 이 서버가 아니라 보고서 변환기(```chart·```diagram)가 맡습니다."
+    "기본 그래프(막대·가로 막대·누적·꺾은선·영역·원·도넛·혼합·양쪽 가로 막대)도 이 서버가 그립니다 — 계정 Word 그래프 코드 사본(acct_basic)이 들어 있어 "
+    "업무 에이전트는 중계 서버(chart_draw)를 거쳐 이 서버로 그리고, 에이전트가 쓴 옛 ECharts 형식(산점도·히트맵·레이더 등)은 compat이 서버 차트로 바꿔 그립니다. "
+    "acct_basic·compat은 중계 서버가 만든 입력을 받는 종류라 목록(list_chart_types)에는 싣지 않습니다. "
+    "계정(Claude 채팅)은 기본 그래프를 원본 코드인 보고서 변환기(```chart)로 그립니다(같은 코드라 그림이 같음). "
+    "도식(흐름도·조직도·SWOT·로드맵 등)은 이 서버가 아니라 보고서 변환기(```diagram)가 맡습니다."
 )
+
+EXTRA_TYPES = [
+    {"type": "acct_basic", "since": "1.5.0", "what": "기본 그래프(막대·가로 막대·누적·꺾은선·영역·원·도넛·혼합·양쪽 가로 막대) — 계정 Word 그래프 코드 사본(chartkit/acct)",
+     "input": "중계 서버가 파일 변환기 pngInput(명세)로 만든 JSON", "used_by": "업무 에이전트(중계 chart_draw)"},
+    {"type": "compat", "since": "1.6.0", "what": "```chart 블록의 옛 ECharts option·기본 산점도를 서버 차트(D-05·F-09·E-07·C-13·F-01·C-08·sunburst·E-01)로 바꿔 그림",
+     "input": "```chart 블록 JSON 그대로", "used_by": "업무 에이전트(중계 chart_draw)"},
+]
 
 TOOLS = [
     {
@@ -76,7 +87,7 @@ TOOLS = [
     },
     {
         "name": "chart_server_status",
-        "description": "서버 상태 — 글꼴(맑은 고딕을 받았는지·대체 글꼴 경고), 게이트 모드, 버전. 비밀값은 돌려주지 않는다.",
+        "description": "서버 상태 — 글꼴(맑은 고딕을 받았는지·대체 글꼴 경고), 게이트 모드, 버전, 목록 밖 종류(extra_types: 업무 에이전트 기본 그래프 acct_basic·옛 형식 변환 compat). 비밀값은 돌려주지 않는다.",
         "inputSchema": {"type": "object", "properties": {}},
         "annotations": {"readOnlyHint": True},
     },
@@ -130,13 +141,16 @@ def call_tool(name: str, a: dict) -> dict:
             return {"content": [_text(chart_api.list_types(code=a["code"]))]}
         items = chart_api.list_types(tag=a.get("tag"))
         return {"content": [_text({"count": len(items), "types": items,
-                                   "note": "code를 주면 예시 입력을 돌려줍니다. 기본 그래프 28종(막대·꺾은선·원 등)과 도식(흐름도·조직도·스윔레인·SWOT·2×2·로드맵 등)은 보고서 변환기가 맡습니다."})]}
+                                   "note": ("code를 주면 예시 입력을 돌려줍니다. 이 목록은 서버 차트 75종입니다. "
+                                            "이 밖에 기본 그래프(막대·가로 막대·누적·꺾은선·영역·원·도넛·혼합·양쪽 가로 막대, acct_basic — 계정 Word 그래프 코드 사본)와 "
+                                            "옛 ECharts 형식 변환(compat)도 이 서버가 그리지만, 업무 에이전트용으로 중계 서버가 만든 입력을 받으므로 목록에 싣지 않습니다(chart_server_status의 extra_types). "
+                                            "계정 채팅은 기본 그래프를 보고서 변환기(```chart)로, 도식(흐름도·조직도·스윔레인·SWOT·2×2·로드맵 등)은 ```diagram으로 그립니다.")})]}
     if name == "chart_server_status":
         fs = setup_fonts()
         return {"content": [_text({"server": SERVER, "font": {"family": fs.get("family"), "malgun": bool(fs.get("regular")),
                                                               "bold": bool(fs.get("bold")), "warning": fs.get("warning")},
                                    "font_source_configured": bool(os.environ.get("FONT_URL_REGULAR")), "gate_mode": GATE_MODE,
-                                   "chart_types": len(chart_api.catalog())})]}
+                                   "chart_types": len(chart_api.catalog()), "extra_types": EXTRA_TYPES})]}
     if name == "draw_chart":
         t0 = time.time()
         r = chart_api.draw(a.get("type"), a.get("data"), title=a.get("title"), subtitle=a.get("subtitle"), unit=a.get("unit"), options=a.get("options"))
