@@ -37,6 +37,8 @@ EXTRA_TYPES = {
     "line_band": "category", "line": "category", "line_marker": "category", "area": "category", "bar": "category", "bar_stacked": "category",
     "bar_percent": "category", "hbar": "category", "hbar_stacked": "category", "pie": "category", "donut": "category", "radar": "category",
     "histogram": "distribution", "progress": "finance", "scatter": "xy",
+    # 1.5.0: 업무 에이전트 기본 그래프 — 계정 Word 그래프 코드 사본(입력은 중계 서버의 pngInput 결과, 목록에는 싣지 않음)
+    "acct_basic": "acct",
 }
 
 

@@ -26,7 +26,7 @@ from chartkit.core import setup_fonts  # noqa: E402
 from chartkit.excel import build as excel_build, finish as excel_finish  # noqa: E402
 from chartkit.errors import ChartInputError  # noqa: E402
 
-SERVER = {"name": "chart-mcp", "version": "1.4.2"}
+SERVER = {"name": "chart-mcp", "version": "1.5.0"}
 SUPPORTED = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05", "2024-10-07"]
 GATE_KEYS = [k.strip() for k in os.environ.get("MCP_GATE_KEYS", "").split(",") if k.strip()]
 GATE_MODE = os.environ.get("MCP_GATE_MODE", "observe")
