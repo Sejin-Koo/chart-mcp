@@ -39,6 +39,8 @@ EXTRA_TYPES = {
     "histogram": "distribution", "progress": "finance", "scatter": "xy",
     # 1.5.0: 업무 에이전트 기본 그래프 — 계정 Word 그래프 코드 사본(입력은 중계 서버의 pngInput 결과, 목록에는 싣지 않음)
     "acct_basic": "acct",
+    # 1.6.0: ```chart 블록의 ECharts option·기본 산점도를 서버 차트로 바꿔 그림(목록에는 싣지 않음)
+    "compat": "compat",
 }
 
 
