@@ -127,3 +127,6 @@ python tests/smoke.py   # 75종 전부 그리기 + 엑셀
 - `acct_basic`(목록에는 싣지 않음): 업무 에이전트 화면의 기본 그래프(막대·가로 막대·누적·꺾은선·영역·원·도넛·혼합·양쪽 가로 막대)를 **계정 Word 그래프 코드 사본**(`chartkit/acct/` — sys-file-builder `scripts/chart-png.py`·`chart_declutter.py`)으로 그린다. 입력은 중계 서버가 파일 변환기 `lib/png-input.js`의 `pngInput(명세)`로 만든 JSON — 계정 `chart.js png`가 쓰는 입력과 같아 같은 명세면 같은 그림이 나온다(가이드 12장 픽셀 일치 확인).
 - 사본은 직접 고치지 않는다: 계정 스킬을 고친 뒤 `python scripts/sync_acct.py <sys-file-builder 폴더>`로 옮기고, `--check`로 SOURCE.json 해시와 같은지 확인한다.
 - 그리는 동안 matplotlib 설정을 기본값으로 돌렸다가 끝나면 되돌린다(서버 차트 서식이 섞이지 않게).
+
+### 1.6.0 (2026-11-26)
+- `compat`(목록에는 싣지 않음): ```chart 블록의 옛 형식 — ECharts `option`(산점도·히트맵·레이더·깔때기·게이지·트리맵·선버스트·생키)과 기본 산점도(`type: "scatter"`, `series[].data = [[x, y]]`) — 을 이 서버 차트(D-05·F-09·E-07·C-13·F-01·C-08·sunburst·E-01)로 바꿔 그린다. data에 블록 JSON을 그대로 넣는다. 바꿀 수 없는 모양(상자수염 option처럼 원자료가 없는 것, 계열 종류가 둘 이상)은 입력 오류 — 업무 에이전트 페이지는 그때 화면에서 직접 그린다.
