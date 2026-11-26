@@ -1,8 +1,8 @@
 {
  "skill": "sys-file-builder",
- "version": "2026-11-26.1",
+ "version": "2026-11-26.2",
  "files": {
-  "chart_png.py": "c1abb6fc80f4acab46ffe5cbaaf4cd4cc80ba7f31802620e41a5fe424670e4cb",
+  "chart_png.py": "4b8429080a9414721617d04a30ef6b6df4304f2648427d03f7492c817bde8f7c",
   "chart_declutter.py": "cb4964cbc2062ccc45b19ff1b35f3f0c4445138314fffe3268145f72350c3df0"
  }
 }

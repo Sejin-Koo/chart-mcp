@@ -245,7 +245,21 @@ def main(spec_path, out_path):
     ax.set_axisbelow(True)
     if sp["legend"]:
         hs = [Patch(color="#" + l["color"], label=l["text"]) if l["color"] else Line2D([], [], linestyle="none", label="(" + l["text"] + ")") for l in sp["legend"]]
-        fig.legend(handles=hs, loc="upper center", ncol=len(hs), frameon=False, bbox_to_anchor=(0.5, 1.0))
+        # 한 줄이 그림 폭을 넘으면(긴 이름 여러 개) 열 수를 줄여 여러 줄로 — 한 줄로 두면 양 끝이 잘렸다(2026-11-26)
+        nc = len(hs)
+        leg = fig.legend(handles=hs, loc="upper center", ncol=nc, frameon=False, bbox_to_anchor=(0.5, 1.0))
+        rend = fig.canvas.get_renderer()
+        while nc > 1 and leg.get_window_extent(rend).width > fig.bbox.width * 0.98:
+            nc -= 1
+            leg.remove()
+            leg = fig.legend(handles=hs, loc="upper center", ncol=nc, frameon=False, bbox_to_anchor=(0.5, 1.0))
+        rows = -(-len(hs) // nc)
+        if rows > 1:  # matplotlib은 세로(열)부터 채우므로, 읽는 순서가 가로(행)로 이어지게 다시 놓는다
+            leg.remove()
+            hs2 = [hs[r * nc + c] for c in range(nc) for r in range(rows) if r * nc + c < len(hs)]
+            leg = fig.legend(handles=hs2, loc="upper center", ncol=nc, frameon=False, bbox_to_anchor=(0.5, 1.0))
+        if rows > 1 and not sp.get("legendTop"):
+            top = round(top - (rows - 1) * 0.2 / h_in, 3)
         fig._tl_rect = (0, 0, 1, top); fig.tight_layout(rect=fig._tl_rect)
     else:
         fig.tight_layout()
@@ -313,7 +327,7 @@ def finish(fig, axes, out_path):
         fig.tight_layout(rect=rect) if rect else fig.tight_layout()
     fig.canvas.draw()
     rend = fig.canvas.get_renderer(); fb = fig.bbox
-    texts = [t for a in axes for t in a.texts if t.get_text()]
+    texts = [t for a in axes for t in a.texts if t.get_text() and t.get_visible()]  # 정리 단계가 숨긴 숫자는 점검에서 뺀다(2026-11-26)
     boxes = [t.get_window_extent(rend) for t in texts]
     issues = []
     for i, b in enumerate(boxes):
@@ -331,7 +345,21 @@ def legend_top(fig, sp, h_in):
     top = sp.get("legendTop") or (round(1 - 0.3 / h_in, 3) if sp["legend"] else 1.0)
     if sp["legend"]:
         hs = [Patch(color="#" + l["color"], label=l["text"]) if l["color"] else Line2D([], [], linestyle="none", label="(" + l["text"] + ")") for l in sp["legend"]]
-        fig.legend(handles=hs, loc="upper center", ncol=len(hs), frameon=False, bbox_to_anchor=(0.5, 1.0))
+        # 한 줄이 그림 폭을 넘으면(긴 이름 여러 개) 열 수를 줄여 여러 줄로 — 한 줄로 두면 양 끝이 잘렸다(2026-11-26)
+        nc = len(hs)
+        leg = fig.legend(handles=hs, loc="upper center", ncol=nc, frameon=False, bbox_to_anchor=(0.5, 1.0))
+        rend = fig.canvas.get_renderer()
+        while nc > 1 and leg.get_window_extent(rend).width > fig.bbox.width * 0.98:
+            nc -= 1
+            leg.remove()
+            leg = fig.legend(handles=hs, loc="upper center", ncol=nc, frameon=False, bbox_to_anchor=(0.5, 1.0))
+        rows = -(-len(hs) // nc)
+        if rows > 1:  # matplotlib은 세로(열)부터 채우므로, 읽는 순서가 가로(행)로 이어지게 다시 놓는다
+            leg.remove()
+            hs2 = [hs[r * nc + c] for c in range(nc) for r in range(rows) if r * nc + c < len(hs)]
+            leg = fig.legend(handles=hs2, loc="upper center", ncol=nc, frameon=False, bbox_to_anchor=(0.5, 1.0))
+        if rows > 1 and not sp.get("legendTop"):
+            top = round(top - (rows - 1) * 0.2 / h_in, 3)
         fig._tl_rect = (0, 0, 1, top); fig.tight_layout(rect=fig._tl_rect)
     else:
         fig.tight_layout()
@@ -512,7 +540,23 @@ def draw_pie(sp, out_path, W, n, x, series):
     wedges, _ = ax.pie(vals, colors=colors, startangle=90, counterclock=False, wedgeprops=wp)
     import math
     ax.set_aspect("equal"); ax.apply_aspect()  # 겹침 판정(화면 좌표)이 최종 모양과 같게 먼저 맞춘다
-    out_boxes = []
+    out_boxes, ring_boxes = [], []
+    rend = fig.canvas.get_renderer()
+
+    def place_out(i, ang, t):
+        # 바깥에 이끌선과 함께 — 앞서 단 바깥 라벨과 겹치면 원 둘레 방향(시계 방향)으로 민다
+        r0, r = 1.0, 1.18
+        ax.plot([r0 * math.cos(ang), r * math.cos(ang)], [r0 * math.sin(ang), r * math.sin(ang)], color="#7F7F7F", lw=0.9)
+        cx, cy = (r + 0.03) * math.cos(ang), (r + 0.03) * math.sin(ang)
+        tx = ax.text(cx, cy, t, ha="left" if cx > 0.05 else "right" if cx < -0.05 else "center", va="center", color="#404040", fontweight="bold", fontsize=PIE_FS_OUT)
+        for _ in range(20):
+            bb = tx.get_window_extent(rend).expanded(1.05, 1.15)
+            if not any(bb.overlaps(o) for o in out_boxes):
+                break
+            cx, cy = cx + 0.09 * math.sin(ang), cy - 0.09 * math.cos(ang)
+            tx.set_position((cx, cy))
+        out_boxes.append(tx.get_window_extent(rend))
+
     for i, w in enumerate(wedges):
         t = sp["pieTexts"][i] if sp["pieTexts"] else ""
         if not t:
@@ -527,22 +571,17 @@ def draw_pie(sp, out_path, W, n, x, series):
             # 고리 안 두 줄(값 / (비율)), 글자 색은 조각 색에 따라(계정 변환기 inkOn과 같음)
             r = 1 - (1 - hole) / 2
             t2 = sp["pieLines"][i] if sp.get("pieLines") else t
-            ax.text(r * math.cos(ang), r * math.sin(ang), t2, ha="center", va="center", color=ink_on(colors[i]), fontweight="bold", fontsize=PIE_FS_RING if "\n" in t2 else PIE_FS, linespacing=1.25)
+            tr = ax.text(r * math.cos(ang), r * math.sin(ang), t2, ha="center", va="center", color=ink_on(colors[i]), fontweight="bold", fontsize=PIE_FS_RING if "\n" in t2 else PIE_FS, linespacing=1.25)
+            # 이웃 조각의 고리 안 라벨과 겹치면(작은 조각이 나란히 있을 때) 바깥 이끌선 라벨로 옮긴다(2026-11-26)
+            bb = tr.get_window_extent(rend).expanded(1.04, 1.04)
+            if any(bb.overlaps(o) for o in ring_boxes):
+                tr.remove()
+                place_out(i, ang, t)
+            else:
+                ring_boxes.append(bb)
         elif (hole or sp.get("pieInside")) and out:
             # 얇은 조각(6% 미만)은 바깥에 이끌선과 함께
-            r0, r = 1.0, 1.18
-            ax.plot([r0 * math.cos(ang), r * math.cos(ang)], [r0 * math.sin(ang), r * math.sin(ang)], color="#7F7F7F", lw=0.9)
-            cx, cy = (r + 0.03) * math.cos(ang), (r + 0.03) * math.sin(ang)
-            tx = ax.text(cx, cy, t, ha="left" if cx > 0.05 else "right" if cx < -0.05 else "center", va="center", color="#404040", fontweight="bold", fontsize=PIE_FS_OUT)
-            # 앞서 단 바깥 라벨과 겹치면 원 둘레 방향(시계 방향)으로 민다
-            rend = fig.canvas.get_renderer()
-            for _ in range(20):
-                bb = tx.get_window_extent(rend).expanded(1.05, 1.15)
-                if not any(bb.overlaps(o) for o in out_boxes):
-                    break
-                cx, cy = cx + 0.09 * math.sin(ang), cy - 0.09 * math.cos(ang)
-                tx.set_position((cx, cy))
-            out_boxes.append(tx.get_window_extent(rend))
+            place_out(i, ang, t)
         else:
             r = 1.12; cx, cy = r * math.cos(ang), r * math.sin(ang)
             ax.text(cx, cy, t, ha="left" if cx > 0.05 else "right" if cx < -0.05 else "center", va="center", color=colors[i], fontweight="bold", fontsize=PIE_FS_OUT)
