@@ -212,8 +212,67 @@ def axis_unit(ax, unit: str | None, which: str = "y") -> None:
         (ax.set_ylabel if which == "y" else ax.set_xlabel)(f"({unit})", color=st.MUTED, fontsize=st.FONT_SIZE - 1)
 
 
+# 맑은 고딕(서버가 받는 글꼴)과 대체 글꼴 DejaVu Sans에 모두 없는 단위 기호는 그리면 네모(□)로 나온다(1.6.3 —
+# 산점도 축 제목 "㎡당 평균 거래가격"의 ㎡가 깨짐, 2026-11-27 답변 시험). 그런 글자만 같은 뜻의 글자로 바꿔 그린다.
+# 글꼴에 있는 글자는 바꾸지 않는다. 표·엑셀 원본의 글은 그대로 둔다.
+_UNIT_SUB = {"㎡": "m²", "㎢": "km²", "㎥": "m³", "㎠": "cm²", "㎤": "cm³", "㎟": "mm²", "㎦": "km³",
+             "㎞": "km", "㎝": "cm", "㎜": "mm", "㎏": "kg", "㎎": "mg", "㎍": "μg", "㎖": "mL", "㎗": "dL", "ℓ": "L",
+             "㏊": "ha", "㎾": "kW", "㎿": "MW", "㎽": "mW", "㎸": "kV", "㎷": "mV", "㏈": "dB", "㎐": "Hz", "㎑": "kHz",
+             "㎒": "MHz", "㎓": "GHz", "℃": "°C", "℉": "°F", "№": "No.", "㏄": "cc", "㎈": "cal", "㎉": "kcal"}
+_glyphs: dict = {}
+
+
+def _font_chars() -> set | None:
+    """지금 그리는 글꼴(맑은 고딕 보통·굵게 + DejaVu Sans)이 가진 글자 집합. 못 읽으면 None(바꾸지 않음)."""
+    key = (_font_state.get("regular"), _font_state.get("bold"))
+    if key in _glyphs:
+        return _glyphs[key]
+    chars: set | None = set()
+    try:
+        from fontTools.ttLib import TTFont
+        paths = [p for p in key if p]
+        paths.append(font_manager.findfont(font_manager.FontProperties(family="DejaVu Sans"), fallback_to_default=False))
+        if not key[0]:  # 맑은 고딕이 없을 때는 실제로 고른 대체 글꼴
+            paths.append(font_manager.findfont(font_manager.FontProperties(family=_font_state.get("family") or "DejaVu Sans")))
+        for p in paths:
+            chars |= set(TTFont(p, lazy=True, fontNumber=0).getBestCmap() or {})
+    except Exception:  # noqa: BLE001 — 글꼴 점검 실패는 그림을 막지 않는다
+        chars = None
+    _glyphs[key] = chars
+    return chars
+
+
+def fix_missing_glyphs(fig) -> list[str]:
+    """그림 안 글자 중 글꼴에 없는 단위 기호를 바꾼다. 바꾼 기호 목록을 돌려준다."""
+    have = _font_chars()
+    if not have:
+        return []
+    done = []
+    from matplotlib.text import Text
+    for t in fig.findobj(Text):
+        s = t.get_text()
+        if not s or s.isascii():
+            continue
+        out, hit = [], False
+        for ch in s:
+            if ord(ch) in have or ch not in _UNIT_SUB or not all(ord(c) in have for c in _UNIT_SUB[ch]):
+                out.append(ch)
+            else:
+                out.append(_UNIT_SUB[ch])
+                hit = True
+                if ch not in done:
+                    done.append(ch)
+        if hit:
+            t.set_text("".join(out))
+    if done:
+        from . import declutter
+        declutter._note(f"글꼴에 없는 기호 {'·'.join(done)}를 {'·'.join(_UNIT_SUB[c] for c in done)}로 바꿔 그렸습니다(표·엑셀 원본은 그대로)")
+    return done
+
+
 def to_png(fig, dpi: int | None = None) -> bytes:
     from . import declutter
+    fix_missing_glyphs(fig)  # 네모로 나오는 단위 기호 바꾸기(1.6.3) — 글자 폭이 바뀌므로 겹침 정리 전에
     declutter.run(fig)  # 글자 겹침 정리(1.4.0)
     b = io.BytesIO()
     fig.savefig(b, format="png", dpi=dpi or st.DPI, bbox_inches=declutter.safe_bbox(fig), pad_inches=0.06)
