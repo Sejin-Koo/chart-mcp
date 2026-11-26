@@ -71,6 +71,8 @@ def draw(ct: str, args: dict, o: dict) -> Result:
         allx = [p["x"] for s in ser for p in s["points"] if p["y"] is not None]
         ally = [p["y"] for s in ser for p in s["points"] if p["y"] is not None]
         smax = max([p["size"] or 0 for s in ser for p in s["points"]] + [0])
+        if ct == "scatter" and smax > 0:  # 1.6.3: 분산형은 점 크기를 그리지 않는다 — 크기를 넣었으면 알린다
+            notes.append("분산형(D-05)은 점 크기(size)를 그리지 않습니다 — 점이 모두 같은 크기입니다. 크기를 보이려면 거품형(D-09)")
         for s, c in zip(ser, cols):
             pts = [p for p in s["points"] if p["y"] is not None]
             xs, ys = [p["x"] for p in pts], [p["y"] for p in pts]
