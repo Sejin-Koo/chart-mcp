@@ -15,7 +15,7 @@ from ..errors import as_list, need
 from .common import (bands, categories, color_warn, colors_for, decimals_of, label_mode, series, table_from_series,
                      target_lines)
 
-LINE_TYPES = {"line", "line_marker", "line_stacked", "line_percent", "step_line", "area", "area_stacked", "area_percent", "line_band",
+LINE_TYPES = {"line", "line_marker", "bar_stacked_total", "line_percent", "step_line", "area", "area_stacked", "area_percent", "line_band",
               "bar", "bar_stacked", "bar_percent", "hbar", "hbar_stacked", "combo"}
 
 
@@ -81,7 +81,10 @@ def draw_line_family(ct: str, args: dict, o: dict) -> Result:
         ser = [s for s in ser if s.get("role") not in ("lower", "upper")]
 
     cols = colors_for(ser)
-    stacked = ct in ("line_stacked", "area_stacked", "area_percent", "line_percent", "bar_stacked", "bar_percent", "hbar_stacked")
+    # 1.7.0: line_percent(B-04)는 쌓지 않고 구성비를 자기 높이에 그린다(쌓으면 맨 위 선이 늘 100에 붙고 라벨과 축 눈금이 어긋남).
+    # line_stacked(옛 B-03)는 없앴다 — B-03은 누적 막대 + 합계 꺾은선(bar_stacked_total).
+    stacked = ct in ("area_stacked", "area_percent", "bar_stacked", "bar_percent", "hbar_stacked", "bar_stacked_total")
+    tops = []  # 누적 막대 조각의 위 경계(계열선용)
     horizontal = ct.startswith("hbar")
     kinds = []
     for i, s in enumerate(ser):
@@ -97,7 +100,7 @@ def draw_line_family(ct: str, args: dict, o: dict) -> Result:
         kinds.append(k)
     right = [str(s.get("axis", "")).lower() in ("right", "1", "secondary") for s in ser]
     has_right = any(right)
-    legend = len(ser) > 1 or band_lo is not None
+    legend = len(ser) > 1 or band_lo is not None or ct == "bar_stacked_total"
     h = 3.4 if not horizontal else max(2.2, 0.9 + 0.32 * n)
     with figure(h, o) as fig:
         top = top_for(fig, title, sub, o, legend)
@@ -141,6 +144,7 @@ def draw_line_family(ct: str, args: dict, o: dict) -> Result:
                             a.text(*((pos, j) if horizontal else (j, pos)), st.fmt(vv[j], dec) + ("%" if ct.endswith("percent") else ""),
                                    ha="center", va="center", color=st.ink_on(c), fontsize=7.3, fontweight="bold", zorder=4)
                     cum = cum + vv
+                    tops.append(cum.copy())
                 else:
                     off = (bar_i - (nbar - 1) / 2) * bw if nbar > 1 else 0
                     bar_i += 1
@@ -190,6 +194,28 @@ def draw_line_family(ct: str, args: dict, o: dict) -> Result:
                             line_labels.setdefault(j, []).append((i, yv[j], st.fmt(vals[j], dec) + suffix, c, a))
                 if not stacked:
                     vmax = max(vmax, np.nanmax(yv) if np.any(~np.isnan(yv)) else 0)
+        # 1.7.0 계열선: 누적 막대 사이를 조각 경계끼리 가는 선으로 잇는다(엑셀 '계열선'과 같음, options.series_lines=false로 끔).
+        # 100% 누적·합계 꺾은선이 있는 누적에서는 맨 위 경계를 빼고 잇는다(늘 100이거나 합계 선과 겹침).
+        if stacked and tops and o.get("series_lines", True) is not False and n > 1:
+            use = tops[:-1] if (ct.endswith("percent") or ct == "bar_stacked_total") else tops
+            for tp in use:
+                for j in range(n - 1):
+                    xs = [j + bw / 2, j + 1 - bw / 2]
+                    ys = [tp[j], tp[j + 1]]
+                    if horizontal:
+                        ax.plot(ys, xs, color=st.MUTED, lw=0.7, zorder=1.5, solid_capstyle="butt")
+                    else:
+                        ax.plot(xs, ys, color=st.MUTED, lw=0.7, zorder=1.5, solid_capstyle="butt")
+        # 1.7.0 B-03: 누적 막대 위에 합계 꺾은선과 합계 숫자
+        if ct == "bar_stacked_total":
+            tot = cum.copy()
+            ax.plot(x, tot, color=st.INK, lw=1.6, marker="o", markersize=4, zorder=4)
+            dec_t = decimals_of([float(v) for v in tot])
+            for j in range(n):
+                ax.annotate(st.fmt(tot[j], dec_t), (j, tot[j]), xytext=(0, 6), textcoords="offset points", ha="center", va="bottom",
+                            color=st.INK, fontsize=st.LABEL_SIZE, fontweight="bold", zorder=6)
+            leg.append((o.get("total_label") or "합계", st.INK, "line"))
+            vmax = max(vmax, float(np.nanmax(tot)) * 1.08)
         if band_lo is not None:
             lo = np.array([np.nan if v is None else v for v in band_lo["values"]], float)
             hi = np.array([np.nan if v is None else v for v in band_hi["values"]], float)
@@ -282,7 +308,11 @@ def draw_line_family(ct: str, args: dict, o: dict) -> Result:
             _lift_secondary(fig, ax, ax2, ser, right, kinds)
         png = to_png(fig)
         w, hh = fig.get_size_inches()
-    head, rows = table_from_series(cats, ser + ([band_lo, band_hi] if band_lo else []))
+    extra_ser = [band_lo, band_hi] if band_lo else []
+    if ct == "bar_stacked_total":
+        extra_ser = [{"name": o.get("total_label") or "합계", "role": "total",
+                      "values": [sum((s_["values"][i] or 0) for s_ in ser) for i in range(n)]}]
+    head, rows = table_from_series(cats, ser + extra_ser)
     return Result(png, notes, table=(head, rows), w=int(w * st.DPI), h=int(hh * st.DPI))
 
 
