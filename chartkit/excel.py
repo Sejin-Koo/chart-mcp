@@ -522,12 +522,39 @@ def _category(ws, r, ct, head, rows, last):
         ln.set_categories(cats)
         bar += ln
         return _style_chart(bar)
+    if ct == "bar_stacked_total":
+        # 1.7.0 B-03: 누적 막대(계열선) + 합계 꺾은선(표 마지막 열)
+        bar, ln = BarChart(), LineChart()
+        bar.type, bar.grouping, bar.overlap = "col", "stacked", 100
+        bar.serLines = ChartLines()
+        for j in range(nser):
+            name = head[1 + j]
+            ser = Series(_ref(ws, 2 + j, T0 + 1, 2 + j, last), title=name)
+            if j == nser - 1:
+                _color(ser, "262626", line=True, fill=False)
+                ser.marker = Marker(symbol="circle", size=5)
+                ser.marker.graphicalProperties.solidFill = "262626"
+                ser.marker.graphicalProperties.line.solidFill = "262626"
+                ser.smooth = False
+                _labels(ser, "t")
+                ln.series.append(ser)
+            else:
+                _color(ser, PAL[j % 6])
+                if n <= 20:
+                    _labels(ser, "ctr")
+                bar.series.append(ser)
+        bar.set_categories(cats)
+        ln.set_categories(cats)
+        bar += ln
+        return _style_chart(bar)
     if ct in ("bar", "bar_stacked", "bar_percent", "hbar", "hbar_stacked", "lollipop", "pictorial_bar", "polar_bar", "dumbbell"):
         ch = BarChart()
         ch.type = "bar" if ct in ("hbar", "hbar_stacked", "lollipop", "polar_bar", "dumbbell") else "col"
         ch.grouping = "stacked" if ct.endswith("stacked") else ("percentStacked" if ct.endswith("percent") else "clustered")
         if ch.grouping != "clustered":
             ch.overlap = 100
+            if o.get("series_lines", True) is not False:
+                ch.serLines = ChartLines()  # 1.7.0 계열선
         if ch.type == "bar":
             ch.x_axis.scaling.orientation = "maxMin"
     elif ct in ("area", "area_stacked", "area_percent", "stream"):
@@ -535,10 +562,9 @@ def _category(ws, r, ct, head, rows, last):
         ch.grouping = "standard" if ct == "area" else ("percentStacked" if ct.endswith("percent") else "stacked")
     else:
         ch = LineChart()
-        if ct in ("line_stacked",):
-            ch.grouping = "stacked"
-        elif ct == "line_percent":
-            ch.grouping = "percentStacked"
+        if ct == "line_percent":  # 1.7.0: 구성비를 쌓지 않고 0~100% 축에
+            ch.y_axis.scaling.min = 0
+            ch.y_axis.scaling.max = 100
     for j in range(nser):
         name = head[1 + j]
         ser = Series(_ref(ws, 2 + j, T0 + 1, 2 + j, last), title=name)
@@ -1243,7 +1269,7 @@ SPECIAL_NOTES = {"marimekko": "엑셀에는 마리메코가 없어 누적 영역
                  "kpi_tiles": "지표 값은 왼쪽 표, 추이는 작은 꺾은선 차트로 넣었습니다."}
 
 
-NATIVE_CATEGORY = {"line", "line_marker", "line_stacked", "line_percent", "step_line", "area", "area_stacked", "area_percent", "line_band", "bar",
+NATIVE_CATEGORY = {"line", "line_marker", "bar_stacked_total", "line_percent", "step_line", "area", "area_stacked", "area_percent", "line_band", "bar",
                    "bar_stacked", "bar_percent", "hbar", "hbar_stacked", "combo", "lollipop", "pictorial_bar", "polar_bar", "dumbbell", "bump", "stream"}
 HEAT = {"heatmap", "correlation", "sensitivity_table", "choropleth", "cluster_heatmap", "waffle"}
 

@@ -136,6 +136,7 @@ def main(spec_path, out_path):
     bar = ax.barh if H else ax.bar
     kw = "height" if H else "width"
     cum = [0.0] * n
+    tops = []  # 누적 막대 조각의 위 경계(계열선용)
     ns = len(series)
     grouped = not sp["stacked"] and ns > 1  # 묶은 막대: 범주마다 계열을 나란히(폭 0.8을 계열 수로 나눔)
     bw = 0.8 / ns if grouped else 0.6
@@ -186,6 +187,13 @@ def main(spec_path, out_path):
                     ax.text(p_, v - off if neg else v + off, t, ha="center", va="top" if neg else "bottom", color=colors[i], fontweight="bold")
         if sp["stacked"]:
             cum = [a + (b or 0) for a, b in zip(cum, s["data"])]
+            tops.append(list(cum))
+    # 누적 막대 계열선: 막대 사이를 조각 경계끼리 가는 회색 선으로 잇는다(엑셀 '계열선'과 같음, 명세 series_lines: false면 끔 — 2026-11-28)
+    if sp["stacked"] and sp.get("seriesLines", True) and n > 1:
+        for tp in tops:
+            for i in range(n - 1):
+                a_, b_ = [i + 0.3, i + 0.7], [tp[i], tp[i + 1]]
+                ax.plot(*((b_, a_) if H else (a_, b_)), color="#7F7F7F", lw=0.7, zorder=1.5, solid_capstyle="butt")
     tot_txt = []
     if sp["stacked"] and sp["showTotal"]:
         for i, t in enumerate(sp["totals"]):
