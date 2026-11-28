@@ -585,6 +585,8 @@ def _category(ws, r, ct, head, rows, last):
                 _labels(ser, "t", "#,##0.0#" if any(isinstance(x[1 + j], float) and not float(x[1 + j]).is_integer() for x in rows if x[1 + j] is not None) else "#,##0")
         else:
             _color(ser, c)
+            if ct == "area_percent" and n <= 20:  # 1.7.1 B-04: 띠 안 비중(%) — 영역은 라벨 자리(dLblPos)를 지정할 수 없어 기본 자리(가운데)
+                _labels(ser, None, "0.0")
             if isinstance(ch, BarChart) and n <= 20:
                 _labels(ser, "outEnd" if ch.grouping == "clustered" else "ctr")
         ch.series.append(ser)
