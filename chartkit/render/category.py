@@ -188,8 +188,10 @@ def draw_line_family(ct: str, args: dict, o: dict) -> Result:
                         idx = [idx[-1]]
                     for j in idx:
                         if stacked and k == "area":
-                            a.text(j, base[j] + vals[j] / 2, st.fmt(vals[j], dec) + ("%" if ct.endswith("percent") else ""),
-                                   ha="center", va="center", color=st.ink_on(c), fontsize=7.3, fontweight="bold", zorder=5)
+                            # 1.7.1: 영역은 축 양 끝까지 채우므로 첫·끝 점 숫자는 안쪽으로 붙여 쓴다(가운데 정렬이면 그림 밖으로 잘림)
+                            ha_ = "left" if (j == 0 and n > 1) else "right" if (j == n - 1 and n > 1) else "center"
+                            a.text(j + (0.06 if ha_ == "left" else -0.06 if ha_ == "right" else 0), base[j] + vals[j] / 2, st.fmt(vals[j], dec) + ("%" if ct.endswith("percent") else ""),
+                                   ha=ha_, va="center", color=st.ink_on(c), fontsize=7.3, fontweight="bold", zorder=5)
                         else:
                             line_labels.setdefault(j, []).append((i, yv[j], st.fmt(vals[j], dec) + suffix, c, a))
                 if not stacked:
@@ -256,7 +258,10 @@ def draw_line_family(ct: str, args: dict, o: dict) -> Result:
             axis_unit(ax, unit, "x")
         else:
             ax.set_xticks(x, cats)
-            ax.set_xlim(-0.6, n - 0.4 + (0.6 if lab_mode == "last" else 0))
+            if kinds and all(k == "area" for k in kinds) and n > 1:
+                ax.set_xlim(0, n - 1)  # 1.7.1: 영역 차트는 축 양 끝까지 채운다(막대 기준 여백이면 양옆이 비어 보임)
+            else:
+                ax.set_xlim(-0.6, n - 0.4 + (0.6 if lab_mode == "last" else 0))
             ax.yaxis.set_major_formatter(num_formatter())
             lo_ = o.get("y_min")
             hi_ = o.get("y_max")
